@@ -7,6 +7,7 @@
        4. 最多 10 个字段上限
        5. 取消时恢复打开前的字段
        6. 确定时写入 fieldStore
+       7. 一键解析并填充模板表头
      ============================================================ -->
 
 <template>
@@ -55,9 +56,20 @@
          预设字段区（8 组）
          ================================================== -->
     <div class="section">
-      <div class="section-title">
-        <span>预设字段</span>
-        <span class="section-subtitle">点击即可添加</span>
+      <div class="section-header">
+        <div class="section-title">
+          <span>预设字段</span>
+          <span class="section-subtitle">点击即可添加</span>
+        </div>
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          :loading="loadingHeaders"
+          @click="handleParseTemplate"
+        >
+          一键解析表头
+        </el-button>
       </div>
 
       <div
@@ -132,6 +144,7 @@
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFieldStore, PRESET_GROUPS } from '@/stores/fieldStore'
+import { getTemplateHeaders } from '@/api/extract'
 
 // ============================================================
 // Props / Emits
@@ -160,6 +173,9 @@ const localFields = ref([])
 
 // 自定义输入框的内容
 const customInput = ref('')
+
+// 解析模板表头时的加载状态
+const loadingHeaders = ref(false)
 
 // ============================================================
 // 监听弹窗打开，复制 store 数据到本地副本
@@ -250,6 +266,51 @@ function handleAddCustom() {
 }
 
 // ============================================================
+// 一键解析模板表头：调后端 /extract/template-headers，
+// 把模板表头批量填入已选字段（自动跳过重复与超上限）
+// ============================================================
+async function handleParseTemplate() {
+  if (loadingHeaders.value) return
+  loadingHeaders.value = true
+
+  try {
+    const res = await getTemplateHeaders()
+    const headers = res.headers || []
+
+    if (headers.length === 0) {
+      ElMessage.warning('未找到有效的模板文件或无法解析表头')
+      return
+    }
+
+    let addedCount = 0
+    let skippedCount = 0
+    for (const header of headers) {
+      if (localFields.value.includes(header)) {
+        skippedCount++
+        continue
+      }
+      if (localFields.value.length >= maxFields) {
+        ElMessage.warning(`已达到 ${maxFields} 个字段上限，已停止自动添加。`)
+        break
+      }
+      localFields.value.push(header)
+      addedCount++
+    }
+
+    if (addedCount > 0) {
+      ElMessage.success(`成功添加 ${addedCount} 个字段！`)
+    } else {
+      ElMessage.info('未添加新字段，可能是字段已存在或已达上限。')
+    }
+  } catch (error) {
+    console.error('解析表头失败:', error)
+    ElMessage.error('解析表头失败，请稍后重试')
+  } finally {
+    loadingHeaders.value = false
+  }
+}
+
+// ============================================================
 // 取消：直接关闭，不写 store
 // ============================================================
 function handleCancel() {
@@ -277,6 +338,22 @@ function handleVisibleChange(val) {
 /* ==================== 通用区块 ==================== */
 .section {
   margin-bottom: 20px;
+}
+
+/* 预设字段区头部：标题 + 一键解析按钮 的弹性布局 */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.section-header .section-title {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .section-title {

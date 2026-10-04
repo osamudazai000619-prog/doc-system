@@ -14,7 +14,7 @@
           <div class="intro-desc">
             请先上传<strong>目标文档</strong>（要提取信息的文件）和
             <strong>模板文件</strong>（要填充的 Word 或 Excel）。
-            支持格式：docx / txt / md / xlsx。
+            支持格式：docx / txt / md / xlsx / pdf。
           </div>
         </div>
       </div>
@@ -24,8 +24,8 @@
     <div class="upload-row">
       <FileUploadCard
         title="目标文档"
-        tip="支持 .docx / .txt / .md / .xlsx，可多选"
-        accept=".txt,.md,.docx,.xlsx"
+        tip="支持 .docx / .txt / .md / .xlsx / .pdf，可多选"
+        accept=".txt,.md,.docx,.xlsx,.pdf"
         :files="fileStore.targetFiles"
         @add="onAddTarget"
         @remove="onRemoveTarget"
@@ -221,11 +221,12 @@ async function handleUpload() {
       ElMessage.warning(
         `解析完成：成功 ${successCount} 个，其他 ${otherCount} 个（请查看状态表）`
       )
-    } else {
+    } else if (successCount > 0) {
       ElMessage.success(`解析完成：全部成功，共 ${successCount} 个`)
     }
   } catch (err) {
     console.error('[上传失败]', err)
+    ElMessage.error('上传失败，请重试')
   } finally {
     uploading.value = false
   }

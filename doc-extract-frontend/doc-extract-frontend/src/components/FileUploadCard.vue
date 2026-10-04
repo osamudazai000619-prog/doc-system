@@ -96,7 +96,7 @@ const props = defineProps({
   // 文件类型限制（HTML accept 语法）
   accept: {
     type: String,
-    default: '.txt,.md,.docx,.xlsx',
+    default: '.txt,.md,.docx,.xlsx,.pdf',
   },
   // 是否允许多选
   multiple: {

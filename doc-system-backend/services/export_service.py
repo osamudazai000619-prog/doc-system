@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from docx import Document
 from openpyxl import load_workbook
 
-from services.upload_service import UPLOAD_META
+from services.upload_service import UPLOAD_META, parse_file
 
 EXPORT_DIR = Path("uploads") / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -519,3 +519,15 @@ async def generate_exported_file(
         "download_url": f"/api/download/{out_id}",
         "message": message,
     }
+
+
+def preview_exported_file(file_id: str) -> Dict[str, str]:
+    """解析已生成的导出文件，返回文件名与文本内容，供前端预览。"""
+    meta = EXPORT_META.get(file_id)
+    if not meta or not Path(meta["path"]).exists():
+        raise HTTPException(404, "文件不存在或已过期")
+    path = Path(meta["path"])
+    status, content, error = parse_file(path, path.suffix.lower())
+    if status != "success":
+        raise HTTPException(400, f"预览失败：{error or '无法解析文件内容'}")
+    return {"filename": meta["filename"], "content": content}

@@ -124,8 +124,69 @@ export const useResultStore = defineStore('result', () => {
 
 
 
+  function normalizeRecords(raw) {
+    if (Array.isArray(raw)) {
+      return raw.filter((r) => r && typeof r === 'object')
+    }
+    if (raw && typeof raw === 'object') {
+      return [raw]
+    }
+    return []
+  }
+
+  /**
+   * 分号列表拆分：当一条记录的所有字段都是等长的分号分隔列表
+   * （LLM 把多实体文档挤进单条记录的常见形态），拆成 N 条记录。
+   * 字段值数量不一致时按最大长度拆，缺失位补"未找到"；
+   * 只有一个分号字段而其余为单值时，单值广播到每一行。
+   */
+  function splitSemicolonRecords(records) {
+    if (records.length !== 1) return records
+    const record = records[0]
+    const keys = Object.keys(record)
+    if (keys.length === 0) return records
+
+    const splitByKey = {}
+    let maxLen = 1
+    keys.forEach((k) => {
+      const parts = String(record[k] ?? '')
+        .split(/[；;]/)
+        .map((s) => s.trim())
+      splitByKey[k] = parts
+      if (parts.length > maxLen) maxLen = parts.length
+    })
+    // 没有任何字段含分号列表，原样返回
+    if (maxLen <= 1) return records
+
+    const rows = []
+    for (let i = 0; i < maxLen; i++) {
+      const row = {}
+      keys.forEach((k) => {
+        const parts = splitByKey[k]
+        if (parts.length === 1) {
+          row[k] = parts[0]              // 单值字段广播
+        } else if (i < parts.length) {
+          row[k] = parts[i]
+        } else {
+          row[k] = '未找到'              // 长度不齐的缺失位
+        }
+      })
+      rows.push(row)
+    }
+    return rows
+  }
+
   function setResults(data) {
-    results.value = Array.isArray(data) ? data : []
+    const list = Array.isArray(data) ? data : []
+    results.value = list.map((file) => ({
+      source_file: file?.source_file || 'unknown',
+      extracted_tables: (Array.isArray(file?.extracted_tables) ? file.extracted_tables : []).map(
+        (table) => ({
+          table_category: table?.table_category || '',
+          records: splitSemicolonRecords(normalizeRecords(table?.records)),
+        })
+      ),
+    }))
     confirmed.value = false
     dirty.value = false
   }

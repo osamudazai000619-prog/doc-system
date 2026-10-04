@@ -42,7 +42,7 @@
       <el-table-column
         prop="filename"
         label="文件名"
-        min-width="220"
+        min-width="200"
         show-overflow-tooltip
       >
         <template #default="{ row }">
@@ -53,15 +53,42 @@
         </template>
       </el-table-column>
 
-      <!-- 状态列 -->
+      <!-- 文件类型列 -->
       <el-table-column
-        prop="status"
-        label="状态"
-        width="150"
+        prop="role"
+        label="文件类型"
+        width="110"
         align="center"
       >
         <template #default="{ row }">
           <el-tag
+            :type="getRoleInfo(row.role).type"
+            effect="plain"
+            size="small"
+            round
+          >
+            {{ getRoleInfo(row.role).text }}
+          </el-tag>
+        </template>
+      </el-table-column>
+
+      <!-- 状态列：error 时直接显示后端返回的报错原因，其余显示状态标签 -->
+      <el-table-column
+        prop="status"
+        label="状态"
+        min-width="180"
+      >
+        <template #default="{ row }">
+          <span
+            v-if="row.status === 'error'"
+            class="error-text"
+            :title="row.error"
+          >
+            <el-icon><WarningFilled /></el-icon>
+            {{ row.error || '解析失败' }}
+          </span>
+          <el-tag
+            v-else
             :type="getStatusInfo(row.status).type"
             effect="light"
             round
@@ -107,7 +134,7 @@
 // Props 定义
 // ============================================================
 defineProps({
-  // 上传返回的文件列表：[{ filename, status, content }]
+  // 上传返回的文件列表：[{ filename, status, content, role, error }]
   files: {
     type: Array,
     default: () => [],
@@ -131,6 +158,17 @@ function getStatusInfo(status) {
   }
   // 未知状态给一个灰色兜底
   return map[status] || { text: '未知', type: 'info' }
+}
+
+// ============================================================
+// 文件角色映射：把后端返回的 role 转成"文字 + 标签颜色"
+// ============================================================
+function getRoleInfo(role) {
+  const map = {
+    target:   { text: '目标文档', type: 'primary' },
+    template: { text: '模板文件', type: 'warning' },
+  }
+  return map[role] || { text: '未知', type: 'info' }
 }
 
 // ============================================================
@@ -174,5 +212,23 @@ function handlePreview(row) {
 
 .no-action {
   color: #c0c4cc;
+}
+
+/* error 状态：报错原因顶替状态标签，红色 + 省略号 + 悬停看全文 */
+.error-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #f56c6c;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.error-text .el-icon {
+  flex-shrink: 0;
+}
+.error-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

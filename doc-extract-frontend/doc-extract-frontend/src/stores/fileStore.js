@@ -9,17 +9,17 @@ export const useFileStore = defineStore('file', () => {
 
   const targetFiles = ref([])       // 目标文档原始 File 对象
   const templateFiles = ref([])     // 模板文件原始 File 对象
-  const allFiles = ref([])          // 后端解析结果 [{ filename, status, content, kind }]
+  const allFiles = ref([])          // 后端解析结果 [{ filename, status, content, role, error }]
 
 
   /**
    * 可用的目标文件（供 /extract 使用）
    */
   const validTargetFiles = computed(() => {
-    const byKind = allFiles.value.filter(
-      (item) => item.kind === 'target' && item.status === 'success'
+    const byRole = allFiles.value.filter(
+      (item) => item.role === 'target' && item.status === 'success'
     )
-    if (byKind.length > 0) return byKind
+    if (byRole.length > 0) return byRole
 
     const targetNames = new Set(targetFiles.value.map((f) => f.name))
     return allFiles.value.filter(
@@ -28,7 +28,7 @@ export const useFileStore = defineStore('file', () => {
   })
 
   const templateParsedFiles = computed(() => {
-    return allFiles.value.filter((item) => item.kind === 'template')
+    return allFiles.value.filter((item) => item.role === 'template')
   })
 
   /**
@@ -64,11 +64,13 @@ export const useFileStore = defineStore('file', () => {
     const templateNames = new Set(templateFiles.value.map((f) => f.name))
 
     allFiles.value = files.map((item) => {
-      if (item.kind) return item 
-      let kind = 'unknown'
-      if (targetNames.has(item.filename)) kind = 'target'
-      else if (templateNames.has(item.filename)) kind = 'template'
-      return { ...item, kind }
+      // 后端已直接返回 role（target/template），优先使用
+      if (item.role) return item
+      // 兜底：旧数据或 role 缺失时，按文件名在本地两个列表中反查
+      let role = 'unknown'
+      if (targetNames.has(item.filename)) role = 'target'
+      else if (templateNames.has(item.filename)) role = 'template'
+      return { ...item, role }
     })
   }
 

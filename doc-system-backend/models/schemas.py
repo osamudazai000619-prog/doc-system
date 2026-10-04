@@ -6,6 +6,8 @@ class UploadResponseItem(BaseModel):
     filename: str
     status: str
     content: str
+    role: str = ""        # 文件角色：target（目标文档）/ template（模板文件）
+    error: str = ""       # 解析失败时的报错信息，成功时为空字符串
 
 # ================= 2. Extract 接口 =================
 class RecordItem(BaseModel):
@@ -19,6 +21,17 @@ class ExtractedTable(BaseModel):
 class ExtractResponseItem(BaseModel):
     source_file: str
     extracted_tables: List[ExtractedTable]
+
+# ---------- 后端内部模型：阶段一"表计划"，不进对外契约 ----------
+class TablePlanItem(BaseModel):
+    category: str = Field(description="分类名，必须逐字抄录自模板表上方的描述文字")
+    filters: Dict[str, str] = Field(
+        default_factory=dict,
+        description="该表的行筛选条件，键为列名，值逐字抄录自用户要求；无条件则为空字典",
+    )
+
+class TablePlan(BaseModel):
+    plans: List[TablePlanItem] = Field(default_factory=list)
 
 class ExtractRequest(BaseModel):
     prompt: str
@@ -40,3 +53,7 @@ class ExportRequest(BaseModel):
 class ExportResponse(BaseModel):
     download_url: str
     message: str
+
+class PreviewResponse(BaseModel):
+    filename: str
+    content: str
