@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from docx import Document
 from openpyxl import load_workbook
 
+from services.history_service import find_export_by_file_id, record_export
 from services.upload_service import UPLOAD_META, parse_file
 
 EXPORT_DIR = Path("uploads") / "exports"
@@ -456,7 +457,7 @@ def fill_word_template(
 
 # ============ 导出入口 ============
 async def generate_exported_file(
-    confirmed_data: List[Dict[str, Any]], template_name: str
+    confirmed_data: List[Dict[str, Any]], template_name: str, task_id: str = ""
 ) -> Dict[str, Any]:
     """
     将确认后的提取数据套入指定模板，生成可下载文件。
@@ -508,8 +509,15 @@ async def generate_exported_file(
         logging.exception("模板填充失败: %s", out_name)
         raise HTTPException(500, f"填充失败：{type(e).__name__}: {e}")
 
-    # 4. 登记导出文件并返回
+    # 4. 登记导出文件并返回（内存 + 数据库双登记，重启后仍可重复下载）
     EXPORT_META[out_id] = {"path": str(out_path), "filename": out_name}
+    record_export(
+        task_id=int(task_id) if str(task_id).isdigit() else None,
+        file_id=out_id,
+        filename=out_name,
+        path=str(out_path),
+        template_asset_id=template_meta.get("asset_id"),
+    )
 
     unfilled = [f for f in available_fields if f not in filled]
     message = f"生成成功：{out_name}（填充 {len(filled)}/{len(available_fields)} 个字段）"
@@ -524,6 +532,10 @@ async def generate_exported_file(
 def preview_exported_file(file_id: str) -> Dict[str, str]:
     """解析已生成的导出文件，返回文件名与文本内容，供前端预览。"""
     meta = EXPORT_META.get(file_id)
+    if not meta:
+        meta = find_export_by_file_id(file_id)  # 内存 miss 回源数据库
+        if meta:
+            EXPORT_META[file_id] = meta
     if not meta or not Path(meta["path"]).exists():
         raise HTTPException(404, "文件不存在或已过期")
     path = Path(meta["path"])

@@ -9,6 +9,7 @@ import UploadPage from '../views/UploadPage.vue'
 import ExtractPage from '../views/ExtractPage.vue'
 import ResultPage from '../views/ResultPage.vue'
 import ExportPage from '../views/ExportPage.vue'
+import SchemePage from '../views/SchemePage.vue'
 
 import { useFileStore } from '@/stores/fileStore'
 import { useResultStore } from '@/stores/resultStore'
@@ -21,6 +22,7 @@ const routes = [
   { path: '/extract', name: 'Extract', component: ExtractPage },
   { path: '/result',  name: 'Result',  component: ResultPage },
   { path: '/export',  name: 'Export',  component: ExportPage },
+  { path: '/schemes', name: 'Schemes', component: SchemePage },
   { path: '/:pathMatch(.*)*', redirect: '/upload' },
 ]
 

@@ -156,16 +156,15 @@ code {
   }
 }
 
+/*
+ * 应用根容器：Vite 模板原样式限宽 1126px 并 margin:auto 居中，
+ * 宽屏下左右大片留白；本项目为全屏左右布局，改为整宽铺满、左对齐。
+ */
 #app {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  min-height: 100vh;
 }
 
 #center {

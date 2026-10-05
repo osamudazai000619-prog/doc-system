@@ -59,6 +59,11 @@ export const useResultStore = defineStore('result', () => {
   const confirmed = ref(false)
 
   /**
+   * 本次提取落库的任务历史 id（后端提取响应带回；导出时回传用于产物关联）
+   */
+  const taskId = ref('')
+
+  /**
    * 是否有未保存的修改
    * 用户编辑任何单元格后置为 true；重新提取或进入导出时置为 false
    */
@@ -230,6 +235,11 @@ export const useResultStore = defineStore('result', () => {
   }
 
 
+  function setTaskId(id) {
+    taskId.value = id ? String(id) : ''
+  }
+
+
   function setDirty(val) {
     dirty.value = !!val
   }
@@ -241,6 +251,7 @@ export const useResultStore = defineStore('result', () => {
     fields.value = []
     confirmed.value = false
     dirty.value = false
+    taskId.value = ''
   }
 
   return {
@@ -251,6 +262,7 @@ export const useResultStore = defineStore('result', () => {
     fields,
     confirmed,
     dirty,
+    taskId,
     // getters
     isEmpty,
     totalRecords,
@@ -263,6 +275,7 @@ export const useResultStore = defineStore('result', () => {
     setPrompt,
     setFields,
     setConfirmed,
+    setTaskId,
     setDirty,
     clearAll,
   }

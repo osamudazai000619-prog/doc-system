@@ -13,6 +13,8 @@ from starlette.concurrency import run_in_threadpool
 from docx import Document
 from openpyxl import load_workbook
 
+from services.asset_service import register_asset
+
 BASE_DIR = Path("uploads")
 TARGET_DIR = BASE_DIR / "targets"
 TEMPLATE_DIR = BASE_DIR / "templates"
@@ -61,15 +63,17 @@ def save_upload_file(upload: UploadFile, role: str) -> Tuple[str, Path, str, str
                 raise ValueError(f"文件超过大小限制（>{MAX_FILE_SIZE // 1024 // 1024}MB）")
             f.write(chunk)
 
+    asset_id, effective_path = register_asset(save_path, original, ext, role, size)
     UPLOAD_META[file_id] = {
         "file_id": file_id,
-        "path": str(save_path),
+        "path": str(effective_path),
         "original_name": original,
         "role": role,
         "ext": ext,
         "size": size,
+        "asset_id": asset_id,
     }
-    return file_id, save_path, original, ext
+    return file_id, effective_path, original, ext
 
 
 def read_text_file(path: Path) -> str:
@@ -694,12 +698,14 @@ async def process_upload_files(
                 continue
 
             error_msg: Optional[str] = None
+            asset_id: Optional[int] = None
             try:
                 # 阻塞的磁盘 IO / 解析放入线程池，避免卡住事件循环
-                _, save_path, original, ext = await run_in_threadpool(
+                file_id, save_path, original, ext = await run_in_threadpool(
                     save_upload_file, uf, role
                 )
                 status, content, error_msg = await run_in_threadpool(parse_file, save_path, ext)
+                asset_id = (UPLOAD_META.get(file_id) or {}).get("asset_id")
             except Exception as e:
                 logging.exception("文件上传保存失败: %s", original)
                 status, content = "error", ""
@@ -711,5 +717,6 @@ async def process_upload_files(
                 "content": content if status == "success" else "",
                 "role": role,
                 "error": error_msg or "",
+                "asset_id": asset_id,  # 增量字段：文件资产库 id，供推荐/方案引用
             })
     return results
