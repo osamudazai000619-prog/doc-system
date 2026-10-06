@@ -113,8 +113,8 @@ function handleVisibleChange(val) {
 <style scoped>
 /* ==================== 内嵌模式 ==================== */
 .preview-inline {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-xs);
   overflow: hidden;
 }
 
@@ -123,28 +123,28 @@ function handleVisibleChange(val) {
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  background-color: #f5f7fa;
-  border-bottom: 1px solid #ebeef5;
+  background-color: var(--de-surface-2);
+  border-bottom: 1px solid var(--de-border);
 }
 
 .preview-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 14px;
+  font-size: var(--de-fs-3);
   font-weight: 600;
-  color: #303133;
+  color: var(--de-text-1);
 }
 
 .preview-stats {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--de-fs-1);
+  color: var(--de-text-3);
 }
 
 /* ==================== 弹窗模式 ==================== */
 .dialog-stats {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--de-fs-1);
+  color: var(--de-text-3);
   margin-bottom: 8px;
   text-align: right;
 }
@@ -156,7 +156,7 @@ function handleVisibleChange(val) {
 /* ==================== 正文区（两种模式共用样式）==================== */
 .preview-content {
   padding: 16px;
-  background-color: #fafafa;
+  background-color: var(--de-surface-2);
   overflow: auto;
   max-height: 400px;
 }
@@ -164,9 +164,9 @@ function handleVisibleChange(val) {
 .preview-content pre {
   margin: 0;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 13px;
+  font-size: var(--de-fs-2);
   line-height: 1.7;
-  color: #303133;
+  color: var(--de-text-1);
   /* 保留原始换行和空格 */
   white-space: pre-wrap;
   word-break: break-word;

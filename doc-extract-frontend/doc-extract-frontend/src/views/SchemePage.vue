@@ -279,8 +279,8 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
 }
-.page-title { font-size: 20px; font-weight: 700; color: #1f2937; }
-.page-sub { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+.page-title { font-size: var(--de-fs-6); font-weight: 700; color: var(--de-text-1); }
+.page-sub { font-size: var(--de-fs-2); color: var(--de-text-3); margin-top: 4px; }
 
 /* ===== 卡片网格：一行 2 个，卡片偏长方形 ===== */
 .scheme-grid {
@@ -294,9 +294,9 @@ onMounted(load)
 
 .scheme-card {
   position: relative;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  background: var(--de-surface-1);
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-md);
   padding: 18px 20px 12px;
   min-height: 210px;
   display: flex;
@@ -305,8 +305,8 @@ onMounted(load)
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 .scheme-card:hover {
-  border-color: #409eff;
-  box-shadow: 0 6px 20px rgba(64, 158, 255, 0.12);
+  border-color: var(--de-primary);
+  box-shadow: 0 6px 20px rgba(34, 211, 238, 0.18);
   transform: translateY(-2px);
 }
 
@@ -314,15 +314,15 @@ onMounted(load)
   position: absolute;
   top: 10px;
   right: 12px;
-  font-size: 18px;
-  color: #c0c4cc;
+  font-size: var(--de-fs-5);
+  color: var(--de-text-3);
 }
-.card-delete:hover { color: #f56c6c; }
+.card-delete:hover { color: var(--de-danger); }
 
 .card-name {
-  font-size: 16px;
+  font-size: var(--de-fs-4);
   font-weight: 700;
-  color: #1f2937;
+  color: var(--de-text-1);
   padding-right: 28px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -333,8 +333,8 @@ onMounted(load)
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  font-size: 13px;
-  color: #6b7280;
+  font-size: var(--de-fs-2);
+  color: var(--de-text-2);
 }
 .card-template span {
   overflow: hidden;
@@ -349,14 +349,14 @@ onMounted(load)
   align-items: center;
   margin-top: 12px;
 }
-.card-fields-more { font-size: 12px; color: #9ca3af; }
-.card-fields-empty { font-size: 12px; color: #c0c4cc; }
+.card-fields-more { font-size: var(--de-fs-1); color: var(--de-text-3); }
+.card-fields-empty { font-size: var(--de-fs-1); color: var(--de-text-3); }
 
 .card-prompt {
   flex: 1;
   margin-top: 10px;
-  font-size: 12px;
-  color: #9ca3af;
+  font-size: var(--de-fs-1);
+  color: var(--de-text-3);
   line-height: 1.6;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -369,13 +369,13 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   margin-top: 8px;
-  border-top: 1px solid #f3f4f6;
+  border-top: 1px solid var(--de-surface-2);
   padding-top: 6px;
 }
-.card-used { font-size: 11px; color: #c0c4cc; }
+.card-used { font-size: var(--de-fs-1); color: var(--de-text-3); }
 
 /* ===== 编辑视图 ===== */
-.edit-card { border-radius: 10px; }
+.edit-card { border-radius: var(--de-r-md); }
 .field-editor {
   display: flex;
   flex-wrap: wrap;
