@@ -25,6 +25,50 @@ print("--- 10. export 路由导入成功 ---")
 app = FastAPI(title="文档信息提取系统", version="0.1.0")
 print("--- 11. APP 实例化成功 ---")
 
+
+# ========== 全局异常安全网 ==========
+# 经验 368093：若错误响应/detail 或正常响应里混入了 bytes（例如把上传文件的
+# 二进制拼进了异常消息），FastAPI 默认的 jsonable_encoder 会对 bytes 执行
+# utf-8 解码，遇到非 UTF-8 字节（如 0xb2）触发 UnicodeDecodeError，导致连接
+# 被中断、接口返回 500。这里注册自定义处理器，递归清洗掉 bytes，保证任何
+# 情况下响应都是可 JSON 序列化的纯文本结构。
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
+
+
+def _sanitize(obj):
+    """递归把对象里的 bytes 替换为安全字符串，保证 JSON 可序列化。"""
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8", errors="replace")
+        except Exception:
+            return "<binary data>"
+    if isinstance(obj, dict):
+        return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(x) for x in obj]
+    if isinstance(obj, set):
+        return [_sanitize(x) for x in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(_sanitize(exc.errors()))},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    # 只暴露错误类型与简短信息，绝不回显可能含二进制的原始内容
+    detail = _sanitize(f"{type(exc).__name__}: {exc}")
+    return JSONResponse(status_code=500, content={"detail": detail})
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

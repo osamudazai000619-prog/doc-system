@@ -1,9 +1,11 @@
 import os
 import json
 import re
+import time
 import asyncio
 import logging
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -12,6 +14,142 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from models.schemas import ExtractedTable, ExtractResponseItem, TablePlan, TablePlanItem
+
+
+@dataclass
+class ExtractResult:
+    """提取结果对象，替代原来的纯字符串值，携带溯源/置信度/风险信息"""
+    value: Any
+    source: Optional[Dict[str, Any]] = None          # {"para_id": int, "page": int, "start": int, "end": int}
+    context: Optional[str] = None                     # 原文逐字摘录片段
+    confidence: float = 0.0                          # 0.0 ~ 1.0
+    risk: Optional[List[str]] = None                 # ["not_found", "low_confidence", "conflict", ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "value": self.value,
+            "source": self.source,
+            "context": self.context,
+            "confidence": self.confidence,
+            "risk": self.risk if self.risk else [],
+        }
+
+    @classmethod
+    def not_found(cls, field_name: str = "") -> "ExtractResult":
+        return cls(value=None, risk=["not_found"], confidence=0.0)
+
+    @classmethod
+    def from_string(cls, text: Optional[str], confidence: float = 0.8) -> "ExtractResult":
+        if text is None or str(text).strip() == "":
+            return cls.not_found()
+        return cls(value=str(text).strip(), confidence=confidence)
+
+
+# 视为"无有效数据"的取值，校验阶段统一打 not_found 风险
+_EMPTY_VALUES = {"", "未找到", "PARSE_ERROR", "None"}
+
+
+def _str_value(v: Any) -> str:
+    """从 records 值（str / ExtractResult / dict）中取出纯字符串值，供比对与拼接使用。"""
+    if isinstance(v, ExtractResult):
+        return "" if v.value is None else str(v.value)
+    if isinstance(v, dict):
+        val = v.get("value")
+        return "" if val is None else str(val)
+    return "" if v is None else str(v)
+
+
+def _wrap_value(v: Any, confidence: float = 0.8) -> Dict[str, Any]:
+    """把任意值包装成 ExtractResult.to_dict() 结构（records 的最终存储格式）。
+    语义占位值（'未找到'/'PARSE_ERROR'/空）统一标记 not_found。"""
+    if isinstance(v, ExtractResult):
+        return v.to_dict()
+    if isinstance(v, dict) and "value" in v:
+        return v
+    s = "" if v is None else str(v).strip()
+    if s in _EMPTY_VALUES:
+        return ExtractResult(value=(s or None), confidence=0.0, risk=["not_found"]).to_dict()
+    return ExtractResult.from_string(s, confidence).to_dict()
+
+
+def _build_table(category: str, records: Dict[str, Any]) -> ExtractedTable:
+    """构造 ExtractedTable：records 的值统一转为 ExtractResult.to_dict()，
+    并用 model_construct 绕过 Pydantic 对 Dict[str,str] 的校验，保留结构化溯源字段。"""
+    wrapped = {f: _wrap_value(records.get(f)) for f in records}
+    return ExtractedTable.model_construct(table_category=category, records=wrapped)
+
+
+# LLM 在字段值后追加的段落ID分隔符，如 "北京||p:3||"；多段 "a||p:1||;b||p:2||"
+_PARA_DELIM = re.compile(r"\|\|\s*p(?:ara_id)?\s*:\s*(\d+)\s*\|\|", re.IGNORECASE)
+
+
+def _extract_para_ids(text: str) -> Tuple[List[str], str]:
+    """从 'value||p:3||' 中抽出 para_id 列表，并返回剥离分隔符后的纯文本。
+    无分隔符时返回 ([], text)，保证旧输出完全兼容。"""
+    if not text:
+        return [], text
+    ids = _PARA_DELIM.findall(text)
+    cleaned = _PARA_DELIM.sub("", text)
+    return ids, cleaned
+
+
+# LLM 在字段值后追加的语义置信度标记，如 "北京||c:0.6||"（取值 0~1）
+_CONF_DELIM = re.compile(
+    r"\|\|\s*c(?:onf(?:idence)?)?\s*:\s*([01](?:\.\d+)?|\.\d+)\s*\|\|",
+    re.IGNORECASE,
+)
+
+
+def _extract_confidence(text: str) -> Tuple[Optional[float], str]:
+    """从 'value||c:0.6||' 中抽取 LLM 自评语义置信度，多段取最小值（最保守），
+    并剥离标记返回纯文本。无标记返回 (None, text)，保证旧输出完全兼容。"""
+    if not text:
+        return None, text
+    vals: List[float] = []
+    for m in _CONF_DELIM.finditer(text):
+        try:
+            vals.append(max(0.0, min(1.0, float(m.group(1)))))
+        except ValueError:
+            continue
+    cleaned = _CONF_DELIM.sub("", text)
+    return (min(vals) if vals else None), cleaned
+
+
+def _assign_pids(lines: List[str], trace_chunks: List[Dict[str, Any]]) -> List[Any]:
+    """为每一行顺序分配 trace 中的 para_id（返回与 lines 等长的列表，无匹配为 None）。
+    采用「顺序消费」对齐：从当前游标起找首个包含该行全部单元格的 trace 段落，
+    这样即使文档存在重复表述，也能按出现次序逐一对应到不同段落，避免错配。"""
+    pids: List[Any] = [None] * len(lines)
+    if not trace_chunks:
+        return pids
+    cursor = 0
+    n = len(trace_chunks)
+    for i, line in enumerate(lines):
+        if not line.strip() or line.startswith("["):
+            continue
+        cells = [c.strip() for c in line.split(" | ")] if " | " in line else [line.strip()]
+        cells = [c for c in cells if c]
+        if not cells:
+            continue
+        for j in range(cursor, n):
+            t = trace_chunks[j].get("text", "")
+            if t and all(c in t for c in cells):
+                pids[i] = trace_chunks[j].get("para_id")
+                cursor = j + 1
+                break
+    return pids
+
+
+def _annotated_chunk_text(chunk: Dict[str, Any]) -> str:
+    """生成喂给 LLM 的块文本：每行前缀 ¶N 标注段落ID（无匹配则不加前缀）。
+    仅用于提示词，chunk["rows"]/["preamble"] 仍保持干净供解析使用。"""
+    lines = list(chunk.get("preamble", [])) + list(chunk.get("rows", []))
+    pids = chunk.get("_line_pids") or []
+    parts: List[str] = []
+    for i, line in enumerate(lines):
+        pid = pids[i] if i < len(pids) else None
+        parts.append(f"¶{pid} {line}" if pid is not None else line)
+    return "\n".join(parts)
 
 # ================= 大模型初始化 =================
 # 兼容 OpenAI 格式的 API（通义千问 / DeepSeek 等），通过环境变量配置
@@ -24,35 +162,55 @@ if not _llm_api_key:
 if not _llm_base_url.startswith(("http://", "https://")):
     raise RuntimeError(f"环境变量 LLM_BASE_URL 非法: {_llm_base_url!r}")
 
-_model_name = os.getenv("LLM_MODEL", "qwen-plus")
+# 模型来源：手动配置优先、自动发现兜底。
+#   - 若环境变量 LLM_MODEL 非空（支持逗号分隔多模型，如 qwen-plus,qwen-turbo），
+#     以手动配置为准，不做自动发现；
+#   - 否则调用 GET {base_url}/models?model=structured-outputs 自动发现支持结构化
+#     输出的模型（带本地 JSON 缓存，1 小时内不重复拉取）。
+# 解析出的模型列表再交由下方“降级链”按顺序调用（降级链逻辑本身不变）。
 
-# qwen3 系列默认开启"思考模式"，该模式下网关拒绝强制 function 调用
-# （400: tool_choice does not support required/object in thinking mode），
-# 而结构化输出必须强制 tool_choice，故 qwen3 默认关闭思考；
-# 可用环境变量 LLM_ENABLE_THINKING=true/false 显式覆盖。
-_extra_body: Dict[str, Any] = {}
-_thinking_cfg = os.getenv("LLM_ENABLE_THINKING", "").strip().lower()
-if _thinking_cfg in ("1", "true", "yes", "on"):
-    _extra_body["enable_thinking"] = True
-elif _thinking_cfg in ("0", "false", "no", "off"):
-    _extra_body["enable_thinking"] = False
-elif _model_name.lower().startswith("qwen3"):
-    _extra_body["enable_thinking"] = False
 
-llm = ChatOpenAI(
-    model=_model_name,
-    api_key=_llm_api_key,
-    base_url=_llm_base_url,
-    temperature=0,  # 尽量降低随机性；注意这不等于结果可复现
-    request_timeout=90,  # 单次请求最长等待 90 秒，防止无限阻塞；
-    # 最坏总耗时 = 阶段一90s + N文件×90s，需落在前端 axios 300s 超时之内
-    extra_body=_extra_body or None,
-)
+def _default_thinking(model_name: str) -> Optional[bool]:
+    """模型默认的 enable_thinking 取值：
+    - qwen3 系列 / qwen- 开头：与结构化输出（强制 tool_choice）冲突，必须关（False）；
+    - minimax：不支持 enable_thinking 参数，返回 None 表示不传该参数；
+    - 其它模型：交由网关自行决定（开，True）。"""
+    name = model_name.lower()
+    if "qwen3" in name or name.startswith("qwen-"):
+        return False      # qwen3 / qwen- 开头：与结构化输出冲突，必须关
+    if "minimax" in name:
+        return None       # MiniMax 不支持 enable_thinking 参数，返回 None 表示不传该参数
+    return True           # 其它模型：交给网关自行决定（开）
+
+
+def _build_extra_body(model_name: str, thinking: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+    """构造请求 extra_body 的 enable_thinking。
+    thinking=None 时按模型默认（见 _default_thinking）；否则用指定值（用于 400 翻转重试）。
+    若最终为 None（如 MiniMax），则不传 enable_thinking，返回 None。"""
+    if thinking is None:
+        thinking = _default_thinking(model_name)
+    if thinking is None:
+        return None  # MiniMax 等模型不支持 enable_thinking，不传该参数
+    return {"enable_thinking": bool(thinking)}
+
+
+def _build_chat(model_name: str, thinking: Optional[bool] = None) -> ChatOpenAI:
+    """为指定模型构造一个全新的 ChatOpenAI 实例。
+    切换模型、或翻转 enable_thinking 时都必须重建实例（及其派生对象），不能复用旧实例。"""
+    return ChatOpenAI(
+        model=model_name,
+        api_key=_llm_api_key,
+        base_url=_llm_base_url,
+        temperature=0,  # 尽量降低随机性；注意这不等于结果可复现
+        request_timeout=90,  # 单次请求最长等待 90 秒，防止无限阻塞；
+        # 最坏总耗时 = 阶段一90s + N文件×90s，需落在前端 axios 300s 超时之内
+        extra_body=_build_extra_body(model_name, thinking),
+    )
 
 # 绑定结构化输出。必须显式用 function_calling：ChatOpenAI 默认 method="json_schema"
 # 走 OpenAI 专有的 Structured Outputs API，qwen 等兼容层不支持，会直接 400。
-# 阶段一：输出"表计划"（几张表、每表分类名与行筛选条件）
-_plan_llm = llm.with_structured_output(TablePlan, method="function_calling")
+# 注意：_plan_llm / _extract_llm 不再是单一实例，而是按模型在 _chain_for 中
+# 惰性构建并缓存（每个模型独立的 ChatOpenAI + with_structured_output 派生对象）。
 
 
 class _TableList(BaseModel):
@@ -61,8 +219,226 @@ class _TableList(BaseModel):
     tables: List[ExtractedTable] = Field(default_factory=list)
 
 
-# 阶段二：按计划输出多张表
-_extract_llm = llm.with_structured_output(_TableList, method="function_calling")
+# ================= 候选模型自动发现 =================
+_logger = logging.getLogger(__name__)
+_MODELS_CACHE_FILE = Path(__file__).resolve().parent.parent / ".models_cache.json"
+_MODELS_CACHE_TTL = 3600  # 本地 JSON 缓存有效期 1 小时
+_discovered_models: Optional[List[str]] = None  # 进程内缓存
+
+# 明显的非文本模型关键字（图像/音频/语音/向量/视觉/视频等），发现时排除
+_NON_TEXT_MODEL_TOKENS = (
+    "image", "audio", "tts", "speech", "voice", "embedding", "embed",
+    "whisper", "ocr", "vlm", "vision", "video", "asr", "dolly",
+)
+
+
+def _is_text_model(model_id: str) -> bool:
+    s = model_id.lower()
+    return not any(tok in s for tok in _NON_TEXT_MODEL_TOKENS)
+
+
+def _normalize_models(raw: List[Any]) -> List[str]:
+    """从 /models 返回的 data 列表里抽取 id，去重、排除非文本模型并排序。"""
+    ids: List[str] = []
+    for m in raw or []:
+        mid = m.get("id") if isinstance(m, dict) else None
+        if isinstance(mid, str) and mid.strip():
+            ids.append(mid.strip())
+    return sorted({m for m in ids if _is_text_model(m)})
+
+
+def _fetch_models_remotely() -> List[str]:
+    """调用 GET {base_url}/models?model=structured-outputs 拉取模型列表。"""
+    import httpx
+    url = _llm_base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {_llm_api_key}"} if _llm_api_key else {}
+    resp = httpx.get(
+        url,
+        params={"model": "structured-outputs"},
+        headers=headers,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    raw = data.get("data", []) if isinstance(data, dict) else []
+    return _normalize_models(raw)
+
+
+def _load_models_cache() -> Optional[List[str]]:
+    """读取本地 JSON 缓存；不存在或超过 1 小时则返回 None。"""
+    try:
+        if not _MODELS_CACHE_FILE.exists():
+            return None
+        payload = json.loads(_MODELS_CACHE_FILE.read_text(encoding="utf-8"))
+        if time.time() - float(payload.get("ts", 0)) > _MODELS_CACHE_TTL:
+            return None
+        models = payload.get("models")
+        if isinstance(models, list) and models:
+            return [str(m) for m in models]
+    except Exception:
+        return None
+    return None
+
+
+def _save_models_cache(models: List[str]) -> None:
+    try:
+        _MODELS_CACHE_FILE.write_text(
+            json.dumps({"ts": time.time(), "models": models}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # 缓存写失败不影响主流程
+
+
+def discover_models(force: bool = False) -> List[str]:
+    """自动发现支持结构化输出的模型：进程内缓存 → 本地 JSON(1h) → 远程拉取。"""
+    global _discovered_models
+    if _discovered_models is not None and not force:
+        return _discovered_models
+    models = None if force else _load_models_cache()
+    if not models:
+        models = _fetch_models_remotely()
+        _save_models_cache(models)
+    _discovered_models = models
+    return models
+
+
+def _resolve_model_names() -> List[str]:
+    """模型来源决策：手动配置（LLM_MODEL）优先；未配置才用自动发现。"""
+    env = os.getenv("LLM_MODEL", "").strip()
+    if env:
+        return [m.strip() for m in env.split(",") if m.strip()] or ["qwen-plus"]
+    try:
+        models = discover_models()
+    except Exception as e:
+        _logger.warning("自动发现模型失败，回退默认 qwen-plus: %s", e)
+        print(f"[model-discovery] 自动发现模型失败，回退默认 qwen-plus: {type(e).__name__}")
+        models = []
+    return models or ["qwen-plus"]
+
+
+# ================= 模型降级链 =================
+# 每个模型下标 -> 已构建的结构化输出对象（plan / extract 各一份）
+_plan_chain: Dict[int, Any] = {}
+_extract_chain: Dict[int, Any] = {}
+# 当前生效模型在 _model_names 中的下标，只增不减（一次切走就不再回头）
+_model_index = 0
+
+
+def _chain_for(kind: str, idx: int, thinking: Optional[bool] = None) -> Any:
+    """取出（必要时先构建）模型 idx 对应的 plan/extract 结构化输出对象。
+    缓存键为 (idx, thinking)：同一模型的不同 enable_thinking 会各自独立重建
+    ChatOpenAI 及其派生对象，互不复用，确保翻转重试时拿到的是新实例。"""
+    key = (idx, thinking)
+    if key not in _plan_chain:
+        models = _resolve_model_names()
+        chat = _build_chat(models[idx], thinking)
+        _plan_chain[key] = chat.with_structured_output(TablePlan, method="function_calling")
+        _extract_chain[key] = chat.with_structured_output(_TableList, method="function_calling")
+    return _plan_chain[key] if kind == "plan" else _extract_chain[key]
+
+
+def _is_quota_error(e: Exception) -> bool:
+    """判断是否为'额度不足/配额'类错误——这类错误才触发模型切换。
+    命中：HTTP 403，或消息中含 insufficient_quota / AllocationQuota / quota / 限流 等关键字。"""
+    code = getattr(e, "status_code", None)
+    if code == 403:
+        return True
+    msg = str(e).lower()
+    return any(
+        k in msg
+        for k in (
+            "insufficient_quota",
+            "allocationquota",
+            "allocation quota",
+            "quota",
+            "rate_limit",
+            "rate limit",
+            "too many requests",
+        )
+    )
+
+
+def _is_thinking_400(e: Exception) -> bool:
+    """判断是否为 enable_thinking 相关的 400（思考模式与 tool_choice/结构化输出冲突）。
+    这类错误应先在同模型上翻转 enable_thinking 重试一次。"""
+    if getattr(e, "status_code", None) != 400:
+        return False
+    msg = str(e).lower()
+    return any(k in msg for k in ("enable_thinking", "thinking mode", "thinking", "tool_choice"))
+
+
+async def _try_model(kind: str, idx: int, messages: List[Any]) -> Any:
+    """尝试单个模型：先用默认 enable_thinking；若遇 thinking 相关 400，则翻转后重试一次。
+    成功返回结果；失败（含翻转后仍失败）则抛出最后一次异常，交外层决定是否切换模型。"""
+    models = _resolve_model_names()
+    name = models[idx]
+    last_err: Optional[Exception] = None
+    # thinking=None 表示用模型默认；第二个元素是翻转值
+    for thinking in (None, not _default_thinking(name)):
+        llm_obj = _chain_for(kind, idx, thinking)
+        try:
+            return await llm_obj.ainvoke(messages)
+        except Exception as e:
+            last_err = e
+            # 仅在“默认值这一轮”遇到 thinking 400 时才翻转重试；翻转后仍失败则直接抛出
+            if _is_thinking_400(e) and thinking is None:
+                flipped = not _default_thinking(name)
+                _logger.warning(
+                    "模型 %s enable_thinking=%s 触发 400，翻转为 %s 重试",
+                    name, _default_thinking(name), flipped,
+                )
+                print(
+                    f"[model-fallback] 模型 {name} enable_thinking 冲突（400），"
+                    f"翻转为 {flipped} 重试"
+                )
+                continue
+            raise
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError(f"模型 {name} 调用失败")
+
+
+async def _ainvoke_with_fallback(kind: str, messages: List[Any]) -> Any:
+    """按降级链顺序调用 LLM：
+    - 单模型内：遇 enable_thinking 相关 400 先翻转重试一次（见 _try_model）；
+    - 模型间：额度不足 或 翻转后仍 400 → 切换到下一模型（重建实例）重试；
+    - 其它错误直接抛出；全部模型都失败时，抛出最后一次的原始错误。"""
+    global _model_index
+    models = _resolve_model_names()
+    n = len(models)
+    last_err: Optional[Exception] = None
+    i = _model_index
+    while i < n:
+        try:
+            return await _try_model(kind, i, messages)
+        except Exception as e:
+            last_err = e
+            if (_is_quota_error(e) or _is_thinking_400(e)) and i < n - 1:
+                reason = "额度不足" if _is_quota_error(e) else "enable_thinking 400"
+                _logger.warning(
+                    "模型 %s %s，已切换至 %s（%s）",
+                    models[i], reason, models[i + 1], type(e).__name__,
+                )
+                print(
+                    f"[model-fallback] 模型 {models[i]} {reason}，"
+                    f"已切换至 {models[i + 1]}"
+                )
+                i += 1
+                _model_index = i
+                continue
+            raise
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("模型降级链为空，无可用模型")
+
+
+async def _ainvoke_plan(messages: List[Any]) -> Any:
+    return await _ainvoke_with_fallback("plan", messages)
+
+
+async def _ainvoke_extract(messages: List[Any]) -> Any:
+    return await _ainvoke_with_fallback("extract", messages)
 
 
 # ================= 阶段一：根据用户要求 + 模板结构，生成"填表计划" =================
@@ -150,7 +526,7 @@ async def _build_table_plan(prompt: str) -> Tuple[List[TablePlanItem], str]:
         return fallback, target_headers
 
     try:
-        plan: Optional[TablePlan] = await _plan_llm.ainvoke([
+        plan: Optional[TablePlan] = await _ainvoke_plan([
             SystemMessage(content=_PLAN_SYSTEM),
             HumanMessage(content=f"【用户要求】\n{prompt}\n\n【模板结构】\n{template_text}"),
         ])
@@ -424,14 +800,20 @@ _EXTRACT_SYSTEM = (
     "4. 铁律：文档中未明确提及的字段值输出“未找到”，不许推测捏造。\n"
     "5. 筛到多行时：每个字段把各行取值按原文行序用英文分号“;”拼接，"
     "且所有字段拼出的段数必须相等；某行该列缺失记“未找到”。\n"
-    "6. 一行都没筛到：该表所有字段输出“未找到”。"
+    "6. 一行都没筛到：该表所有字段输出“未找到”。\n"
+    "7.【段落溯源】若【文档内容】中某行以 ¶N 开头（N 为数字），则 N 是该行的段落ID。"
+    "请在每个输出值后紧接追加 ||p:N|| 标注其来源段落；多行拼接时每段各自标注，"
+    "例如 北京||p:3||;上海||p:8||。无法定位段落时省略该标记（只输出纯值）。\n"
+    "8.【语义置信度】若某值属于推断/估算、表述有歧义、或原文中存在多个不一致表述，"
+    "请在该值的 ||p:N||（如有）之后追加 ||c:0.x||（x 为 0~1 的把握度，越不确定越小，"
+    "如 0.5）；逐字抄录、确信无疑的值不要加该标记。"
 )
 
 # 分块模式追加的硬约束
 _CHUNK_EXTRACT_SYSTEM = _EXTRACT_SYSTEM + (
-    "\n7.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
+    "\n9.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
     "严禁补充块外数据。\n"
-    "8. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
+    "10. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
     "即使某列在块内每行取值相同（如国家、大洲、人口），也必须逐行重复 N 次，"
     "严禁只给一个汇总值。"
 )
@@ -443,7 +825,11 @@ _PROSE_FALLBACK_SYSTEM = (
     "严格对照【目标文档的真实表头】来定位列数据。\n"
     "1. table_category 固定为“默认表”。\n"
     "2. records 的键必须与用户指定的字段完全一致，不得增删改。\n"
-    "3. 文档中未明确提及的字段值输出“未找到”，不许推测捏造。"
+    "3. 文档中未明确提及的字段值输出“未找到”，不许推测捏造。\n"
+    "4.【段落溯源】文档内容中以 ¶N 开头的行，N 即段落ID；请在每个输出值后追加 "
+    "||p:N|| 标注来源段落（多段各标一个），无法定位则省略。\n"
+    "5.【语义置信度】推断/估算/有歧义的值在 ||p:N|| 后追加 ||c:0.x||（0~1，越小越不确定），"
+    "逐字抄录的确信值不要加。"
 )
 
 
@@ -462,54 +848,111 @@ def _normalize_tables(
     """
     out: List[ExtractedTable] = []
     for t in tables:
-        records: Dict[str, str] = {}
+        records: Dict[str, Any] = {}
         for f in fields:
-            raw = str(t.records.get(f, "")).strip()
+            # 解析 LLM 附加的段落ID（||p:N||）与语义置信度（||c:0.x||），剥离后得到纯值
+            raw_in = str(t.records.get(f, "")).strip()
+            llm_conf, raw_in = _extract_confidence(raw_in)
+            pids, raw = _extract_para_ids(raw_in)
             segs = [s.strip() for s in re.split(r"[;；]", raw)] if raw else []
             segs = [s if s else "未找到" for s in segs]
             if len(segs) == 1 and n_rows > 1:
                 segs = segs * n_rows  # 常量列广播
+                if len(pids) == 1:
+                    pids = pids * n_rows  # 同源段落一并广播
             elif len(segs) < n_rows:
                 segs += ["未找到"] * (n_rows - len(segs))
+                pids += [""] * (n_rows - len(pids))
             elif len(segs) > n_rows:
                 logging.warning(
                     "块表「%s」字段「%s」返回%d段，超过块行数%d已截断",
                     t.table_category, f, len(segs), n_rows,
                 )
                 segs = segs[:n_rows]
-            records[f] = ";".join(segs)
-        out.append(ExtractedTable(table_category=t.table_category, records=records))
+                pids = pids[:n_rows]
+            # 兜底：保证 pids 与 segs 严格等长（按段对齐）
+            if len(pids) < len(segs):
+                pids += [""] * (len(segs) - len(pids))
+            elif len(pids) > len(segs):
+                pids = pids[:len(segs)]
+            joined = ";".join(segs)
+            # 包装为 ExtractResult：占位行占比越高，置信度越低；全占位则打 not_found
+            empty_ratio = sum(1 for s in segs if s in _EMPTY_VALUES) / max(len(segs), 1)
+            if empty_ratio >= 1.0:
+                cell = ExtractResult(
+                    value=joined, confidence=0.0, risk=["not_found"]
+                ).to_dict()
+            else:
+                cell = ExtractResult(
+                    value=joined, confidence=round(1.0 - empty_ratio, 3)
+                ).to_dict()
+            cell["__para_ids"] = ";".join(pids)  # 临时键，_attach_trace 消费后移除
+            if llm_conf is not None:
+                cell["__llm_conf"] = llm_conf  # 临时键，_fuse_confidence 消费后移除
+            records[f] = cell
+        out.append(_build_table(t.table_category, records))
     return out
 
 
 def _merge_chunk_tables(
     per_chunk: List[List[ExtractedTable]], fields: List[str]
 ) -> List[ExtractedTable]:
-    """按块顺序、按 table_category 拼接各字段分号串，分类顺序以首次出现为准。"""
+    """按块顺序、按 table_category 拼接各字段分号串，分类顺序以首次出现为准。
+    拼接时取各块的纯字符串值（兼容 ExtractResult/dict），合并后重新包装为带置信度的结构。"""
     order: List[str] = []
     buckets: Dict[str, Dict[str, List[str]]] = {}
+    pid_buckets: Dict[str, Dict[str, List[str]]] = {}
+    conf_buckets: Dict[str, Dict[str, List[float]]] = {}
     for tables in per_chunk:
         for t in tables:
             if t.table_category not in buckets:
                 buckets[t.table_category] = {f: [] for f in fields}
+                pid_buckets[t.table_category] = {f: [] for f in fields}
+                conf_buckets[t.table_category] = {f: [] for f in fields}
                 order.append(t.table_category)
             for f in fields:
-                buckets[t.table_category][f].append(t.records.get(f, "未找到"))
-    return [
-        ExtractedTable(
-            table_category=cat,
-            records={f: ";".join(buckets[cat][f]) for f in fields},
-        )
-        for cat in order
-    ]
+                buckets[t.table_category][f].append(_str_value(t.records.get(f, "未找到")))
+                cell = t.records.get(f)
+                pp = cell.get("__para_ids", "") if isinstance(cell, dict) else ""
+                pid_buckets[t.table_category][f].extend(
+                    [x for x in re.split(r"[;；]", pp) if x != ""] if pp else []
+                )
+                lc = cell.get("__llm_conf") if isinstance(cell, dict) else None
+                if isinstance(lc, (int, float)):
+                    conf_buckets[t.table_category][f].append(float(lc))
+    merged: List[ExtractedTable] = []
+    for cat in order:
+        records: Dict[str, Any] = {}
+        for f in fields:
+            segs = buckets[cat][f]
+            joined = ";".join(segs)
+            empty_ratio = sum(1 for s in segs if s in _EMPTY_VALUES) / max(len(segs), 1)
+            if empty_ratio >= 1.0:
+                cell = ExtractResult(
+                    value=joined, confidence=0.0, risk=["not_found"]
+                ).to_dict()
+            else:
+                cell = ExtractResult(
+                    value=joined, confidence=round(1.0 - empty_ratio, 3)
+                ).to_dict()
+            cell["__para_ids"] = ";".join(pid_buckets[cat][f])
+            confs = conf_buckets[cat][f]
+            if confs:
+                cell["__llm_conf"] = min(confs)  # 跨块取最保守的语义置信度
+            records[f] = cell
+        merged.append(_build_table(cat, records))
+    return merged
 
 
 def _placeholder_tables(n_rows: int, fields: List[str], category: str) -> List[ExtractedTable]:
     """整块/半块彻底失败时的占位：每个字段补 n_rows 个"未找到"，保证段数对齐。"""
-    return [ExtractedTable(
-        table_category=category,
-        records={f: ";".join(["未找到"] * n_rows) for f in fields},
-    )]
+    records = {
+        f: ExtractResult(
+            value=";".join(["未找到"] * n_rows), confidence=0.0, risk=["not_found"]
+        ).to_dict()
+        for f in fields
+    }
+    return [ExtractedTable.model_construct(table_category=category, records=records)]
 
 
 def _chunk_constant_columns(chunk: Dict[str, Any]) -> Dict[str, str]:
@@ -556,13 +999,19 @@ def _prune_chunk_to_columns(chunk: Dict[str, Any], keep_names: List[str]) -> Dic
             "rows": [pick(r) for r in chunk.get("rows", [])]}
 
 
-def _constant_records(const: Dict[str, str], fields: List[str], n_rows: int) -> Dict[str, str]:
-    """常量列记录：唯一值广播为 n_rows 段（空值记"未找到"）。"""
-    rec: Dict[str, str] = {}
+def _constant_records(const: Dict[str, str], fields: List[str], n_rows: int) -> Dict[str, Any]:
+    """常量列记录：唯一值广播为 n_rows 段（空值记"未找到"）。
+    常量列由代码直接从源数据填充，100% 准确，置信度记 1.0。"""
+    rec: Dict[str, Any] = {}
     for f in fields:
         if f in const:
             v = const[f] if const[f] else "未找到"
-            rec[f] = ";".join([v] * n_rows)
+            is_empty = v in _EMPTY_VALUES
+            rec[f] = ExtractResult(
+                value=";".join([v] * n_rows),
+                confidence=0.0 if is_empty else 1.0,
+                risk=(["not_found"] if is_empty else None),
+            ).to_dict()
     return rec
 
 
@@ -585,12 +1034,12 @@ async def _invoke_chunk(
         f"禁止把列名作为值输出；表头之后共有 N={n_rows} 个数据行，"
         f"每个字段输出的分号段数必须恰好等于 {n_rows}，且与数据行一一对应、顺序不得变动。\n"
         f"{extra}"
-        f"文档内容：\n{_chunk_text(chunk)}"
+        f"文档内容（行首 ¶N 为段落ID，提取值请按规则追加 ||p:N||）：\n{_annotated_chunk_text(chunk)}"
     )
     async with sem:
         for attempt in (1, 2):
             try:
-                result: Optional[_TableList] = await _extract_llm.ainvoke([
+                result: Optional[_TableList] = await _ainvoke_extract([
                     SystemMessage(content=_CHUNK_EXTRACT_SYSTEM),
                     HumanMessage(content=human),
                 ])
@@ -661,7 +1110,9 @@ def _validate_chunk(
     checks: List[Tuple[str, int, bool]]
 ) -> float:
     """对位率 [0,1]：各校验列逐行命中率的最小值（最弱列决定是否修复）。
-    某字段段数与块行数不一致直接判 0；无校验列时返回 1.0（无法机器校验）。"""
+    某字段段数与块行数不一致直接判 0；无校验列时返回 1.0（无法机器校验）。
+    副作用：对命中不全（low_confidence）或段内取值冲突（conflict）的字段，
+    在其 records 结构上原地补打 risk 标记。"""
     if not checks or not tables:
         return 1.0 if not checks else 0.0
     if not chunk["rows"]:
@@ -672,15 +1123,28 @@ def _validate_chunk(
         for r in chunk["rows"]:
             cells = r.split(" | ")
             expected.append(cells[col].strip() if col < len(cells) else "")
-        # 找到含该字段的首条模型表记录
-        raw = next((t.records.get(field) for t in tables if field in t.records), None)
+        # 找到含该字段的首条模型表记录（值可能是 ExtractResult/dict/str）
+        owner = next((t for t in tables if field in t.records), None)
+        raw = owner.records.get(field) if owner else None
         if raw is None:
             return 0.0
-        got = [x.strip() for x in re.split(r"[;；]", str(raw))]
+        got = [x.strip() for x in re.split(r"[;；]", _str_value(raw))]
         if len(got) != len(expected):
             return 0.0
         hit = sum(1 for a, b in zip(expected, got) if _cells_match(a, b, is_numeric))
-        scores.append(hit / len(expected))
+        ratio = hit / len(expected)
+        scores.append(ratio)
+        # —— 风险标记：原地写回 owner.records[field] 的 dict 结构 ——
+        cell = owner.records.get(field) if owner else None
+        if isinstance(cell, dict):
+            risk = list(cell.get("risk") or [])
+            distinct = {g for g in got if g not in _EMPTY_VALUES}
+            if len(distinct) > 1 and "conflict" not in risk:
+                risk.append("conflict")
+            if ratio < 1.0 and "low_confidence" not in risk:
+                risk.append("low_confidence")
+            if risk:
+                cell["risk"] = risk
     return min(scores)
 
 
@@ -728,7 +1192,7 @@ async def _run_table_chunk(
 
     if not dyn_fields:
         # 块内所有目标字段都是常量：无需调用模型
-        return [ExtractedTable(table_category=default_cat, records=const_records)]
+        return [_build_table(default_cat, const_records)]
 
     model_chunk = _prune_chunk_to_columns(chunk, dyn_fields)
     ok, payload = await _invoke_chunk(
@@ -784,11 +1248,31 @@ async def _run_table_chunk(
     return merged
 
 
+def _wrap_llm_tables(tables: List[ExtractedTable]) -> List[ExtractedTable]:
+    """把 LLM 直接返回的 records（值为 str）统一包装为带溯源/置信度的 dict 结构。"""
+    out: List[ExtractedTable] = []
+    for t in tables:
+        records: Dict[str, Any] = {}
+        for f, v in t.records.items():
+            llm_conf, sv = _extract_confidence(_str_value(v))
+            pids, sval = _extract_para_ids(sv)
+            if sval in _EMPTY_VALUES:
+                cell = ExtractResult(value=sval or None, confidence=0.0, risk=["not_found"]).to_dict()
+            else:
+                cell = ExtractResult.from_string(sval, confidence=0.8).to_dict()
+            cell["__para_ids"] = ";".join(pids)
+            if llm_conf is not None:
+                cell["__llm_conf"] = llm_conf
+            records[f] = cell
+        out.append(ExtractedTable.model_construct(table_category=t.table_category, records=records))
+    return out
+
+
 async def _run_prose_chunk(
     chunk: Dict[str, Any], base_human: str, source_file: str, fields: List[str]
 ) -> List[ExtractedTable]:
     """散文文档：单块请求，沿用旧的"忽略计划再试一次"兜底；最终失败给 PARSE_ERROR。"""
-    text = chunk["text"]
+    text = chunk.get("_annotated_text") or chunk["text"]
     if len(text) > MAX_CONTENT_LENGTH:
         logging.warning("文件 %s 散文内容过长(%d字符)，截断至%d字符",
                         source_file, len(text), MAX_CONTENT_LENGTH)
@@ -796,34 +1280,37 @@ async def _run_prose_chunk(
     human = f"{base_human}文档内容：\n{text}"
 
     try:
-        result: Optional[_TableList] = await _extract_llm.ainvoke([
+        result: Optional[_TableList] = await _ainvoke_extract([
             SystemMessage(content=_EXTRACT_SYSTEM),
             HumanMessage(content=human),
         ])
         if result is None or not result.tables:
             raise ValueError("模型未能返回有效的结构化数据")
-        return result.tables
+        return _wrap_llm_tables(result.tables)
     except Exception as e:
         logging.exception(f"文件 {source_file} 散文提取异常: {str(e)}")
         try:
-            fallback: Optional[_TableList] = await _extract_llm.ainvoke([
+            fallback: Optional[_TableList] = await _ainvoke_extract([
                 SystemMessage(content=_PROSE_FALLBACK_SYSTEM),
                 HumanMessage(content=human),
             ])
             if fallback is None or not fallback.tables:
                 raise ValueError("兜底提取依然失败")
             logging.info("文件 %s 兜底提取成功，共 %d 张表", source_file, len(fallback.tables))
-            return fallback.tables
+            return _wrap_llm_tables(fallback.tables)
         except Exception as fallback_e:
             logging.exception(f"文件 {source_file} 兜底提取失败: {fallback_e}")
-            return [ExtractedTable(
+            return [ExtractedTable.model_construct(
                 table_category="解析异常",
-                records={field: "PARSE_ERROR" for field in fields},
+                records={field: ExtractResult(
+                    value="PARSE_ERROR", confidence=0.0, risk=["not_found"]
+                ).to_dict() for field in fields},
             )]
 
 
 async def extract_info_via_ai(
-    prompt: str, fields: List[str], documents: List[Dict[str, Any]]
+    prompt: str, fields: List[str], documents: List[Dict[str, Any]],
+    trace: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> List[ExtractResponseItem]:
     """
     调用大模型按指定字段从文档中提取结构化信息。
@@ -858,6 +1345,17 @@ async def extract_info_via_ai(
     for doc in documents:
         source_file = doc.get("filename", "unknown")
         doc_content = doc.get("content", json.dumps(doc, ensure_ascii=False))
+        # 溯源数据：优先用按文件名传入的全局 trace，其次用 document 自带的 trace。
+        # trace 支持两种形态：{"chunks":[...],"para_ids":{}}（routers 新格式）或纯列表。
+        raw_trace = (trace or {}).get(source_file)
+        if isinstance(raw_trace, dict):
+            doc_trace = raw_trace.get("chunks") or []
+        elif isinstance(raw_trace, list):
+            doc_trace = raw_trace
+        else:
+            doc_trace = None
+        if not doc_trace and isinstance(doc.get("trace"), list):
+            doc_trace = doc.get("trace")
 
         # 提示词中含日期范围时，先按日期列预筛选，减少分块数量与 token 消耗
         if date_range:
@@ -875,6 +1373,20 @@ async def extract_info_via_ai(
             )
 
         chunks = split_into_chunks(doc_content)
+
+        # 为喂给 LLM 的文本标注段落ID（行首 ¶N）：LLM 据此在返回值里追加 ||p:N||，
+        # 实现精确溯源。仅写入提示词用文本（_annotated_text / _line_pids），
+        # chunk["rows"]/["preamble"] 保持干净，不影响 " | " 行列解析。
+        for ch in chunks:
+            if ch.get("kind") == "prose":
+                lines = ch.get("text", "").split("\n")
+                pids = _assign_pids(lines, doc_trace)
+                ch["_annotated_text"] = "\n".join(
+                    (f"¶{p} {ln}" if p is not None else ln) for ln, p in zip(lines, pids)
+                )
+            else:
+                lines = list(ch.get("preamble", [])) + list(ch.get("rows", []))
+                ch["_line_pids"] = _assign_pids(lines, doc_trace)
 
         if len(chunks) == 1 and chunks[0]["kind"] == "prose":
             # 散文文档：条目数不固定，单块提取不做段数约束
@@ -898,9 +1410,11 @@ async def extract_info_via_ai(
             if len(failed) == total:
                 # 全部块失败属于系统性故障（鉴权/额度/网关宕机），不得伪装成"未找到"
                 logging.error("文件 %s 全部 %d 个块提取失败，返回 PARSE_ERROR", source_file, total)
-                extracted_tables = [ExtractedTable(
+                extracted_tables = [ExtractedTable.model_construct(
                     table_category="解析异常",
-                    records={field: "PARSE_ERROR" for field in fields},
+                    records={field: ExtractResult(
+                        value="PARSE_ERROR", confidence=0.0, risk=["not_found"]
+                    ).to_dict() for field in fields},
                 )]
             else:
                 per_chunk: List[List[ExtractedTable]] = []
@@ -924,9 +1438,161 @@ async def extract_info_via_ai(
                     [t.table_category for t in extracted_tables],
                 )
 
-        final_results.append(ExtractResponseItem(
+        # 溯源回填：按字段值在原文段落中做子串匹配，填充 source / context
+        extracted_tables = _attach_trace(extracted_tables, doc_trace)
+        # 置信度融合：min(启发式置信度, LLM 语义置信度)，并清理 __llm_conf 临时键
+        extracted_tables = _fuse_confidence(extracted_tables)
+        # 最终校验：统一补打 not_found / low_confidence 风险标记
+        extracted_tables = validate_and_risk_mark(extracted_tables, fields)
+        final_results.append(ExtractResponseItem.model_construct(
             source_file=source_file,
             extracted_tables=extracted_tables,
         ))
 
     return final_results
+
+
+def validate_and_risk_mark(results: List[Any], columns: List[str]) -> List[Any]:
+    """扫描所有提取结果，给有风险的字段补充 risk 标记：
+    - 值为空 / "未找到" / "PARSE_ERROR" → 补 not_found
+    - 置信度低于 0.5 → 补 low_confidence
+    入参兼容两种形态：List[ExtractedTable]（records 为 dict）或 List[Dict]
+    （row[col] 为 ExtractResult 对象 / dict）。"""
+    for row in results:
+        records = row.records if hasattr(row, "records") else row
+        if not isinstance(records, dict):
+            continue
+        for col in columns:
+            val = records.get(col)
+            if val is None:
+                continue
+            if isinstance(val, ExtractResult):
+                risk = list(val.risk or [])
+                v = val.value
+                if (v is None or str(v).strip() in _EMPTY_VALUES) and "not_found" not in risk:
+                    risk.append("not_found")
+                if val.confidence < 0.5 and "low_confidence" not in risk:
+                    risk.append("low_confidence")
+                val.risk = risk
+            elif isinstance(val, dict):
+                risk = list(val.get("risk") or [])
+                v = val.get("value")
+                if (v is None or str(v).strip() in _EMPTY_VALUES) and "not_found" not in risk:
+                    risk.append("not_found")
+                if val.get("confidence", 0) < 0.5 and "low_confidence" not in risk:
+                    risk.append("low_confidence")
+                val["risk"] = risk
+    return results
+
+
+def _find_trace_chunk(
+    seg: str, trace_chunks: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """在溯源段落中查找首个包含 seg 的段落并返回。
+    注意（任务4）：本函数现为「降级路径」，仅当 LLM 未返回 para_id（__para_ids 为空）
+    时由 _attach_trace 调用。纯子串匹配，文档中若存在重复表述，可能命中错误段落；
+    主路径已改为 LLM 直接携带 para_id 精确命中。"""
+    if not seg or not trace_chunks:
+        return None
+    for c in trace_chunks:
+        text = c.get("text", "")
+        if text and seg in text:
+            return c
+    return None
+
+
+def _attach_trace(
+    tables: List[ExtractedTable], trace_chunks: Optional[List[Dict[str, Any]]]
+) -> List[ExtractedTable]:
+    """回填每个字段的 source / context。
+
+    优先级（任务4）：
+      1) LLM 返回的 para_id（字段 cell 内的临时键 __para_ids，形如 "3;8"）——
+         直接按 ID 精确命中段落，杜绝重复表述导致的错配；
+      2) 降级：__para_ids 缺失或未命中时，回退到 _find_trace_chunk 的子串匹配
+         （兼容旧调用方 / LLM 未按约定标注的情形），命中同一段落逻辑。
+
+    命中则填充 source 与 context（原文截断 200 字符），并清掉 no_source 风险；
+    未命中且字段有实际值时补 no_source 风险。临时键 __para_ids 无论命中与否都会被移除。"""
+    if not trace_chunks:
+        # 无溯源时仍要清理临时键，避免泄漏到最终输出
+        for t in tables:
+            for cell in t.records.values():
+                if isinstance(cell, dict):
+                    cell.pop("__para_ids", None)
+        return tables
+    # 建立 para_id -> 段落 索引（ID 统一按字符串比较，兼容 int/str）
+    by_pid: Dict[str, Dict[str, Any]] = {}
+    for c in trace_chunks:
+        pid = c.get("para_id")
+        if pid is not None and str(pid) not in by_pid:
+            by_pid[str(pid)] = c
+
+    def _fill(cell: Dict[str, Any], hit: Dict[str, Any]) -> None:
+        cell["source"] = {
+            "para_id": hit.get("para_id"),
+            "page": hit.get("page", 0),
+            "start": hit.get("start"),
+            "end": hit.get("end"),
+        }
+        ctx = hit.get("text", "") or ""
+        cell["context"] = ctx[:200] if len(ctx) > 200 else ctx
+        cell["risk"] = [r for r in (cell.get("risk") or []) if r != "no_source"]
+
+    def _mark_no_source(cell: Dict[str, Any]) -> None:
+        risk = list(cell.get("risk") or [])
+        if "no_source" not in risk:
+            risk.append("no_source")
+        cell["risk"] = risk
+
+    for t in tables:
+        for f, cell in t.records.items():
+            if not isinstance(cell, dict):
+                continue
+            raw = _str_value(cell)
+            first_seg = next(
+                (s.strip() for s in re.split(r"[;；]", raw)
+                 if s.strip() and s.strip() not in _EMPTY_VALUES),
+                None,
+            )
+            if not first_seg:
+                continue  # 全为占位值，无溯源可寻
+
+            # 优先级 1：LLM 返回的 para_id 精确命中
+            hit: Optional[Dict[str, Any]] = None
+            pids_str = cell.get("__para_ids", "")
+            if pids_str:
+                for pid in re.split(r"[;；]", pids_str):
+                    pid = pid.strip()
+                    if pid and pid in by_pid:
+                        hit = by_pid[pid]
+                        break
+
+            # 优先级 2：降级子串匹配（兼容旧调用方 / 模型未标注）
+            if hit is None:
+                hit = _find_trace_chunk(first_seg, trace_chunks)
+
+            if hit:
+                _fill(cell, hit)
+            else:
+                _mark_no_source(cell)
+            cell.pop("__para_ids", None)  # 移除临时键
+    return tables
+
+
+def _fuse_confidence(tables: List[ExtractedTable]) -> List[ExtractedTable]:
+    """融合置信度：cell.confidence = min(启发式置信度, LLM 语义置信度)，
+    并清理临时键 __llm_conf。LLM 未自评（无 __llm_conf）时保持启发式值不变。
+    取 min 保证「既懂语义又守规则」：任一来源存疑都压低最终置信度。"""
+    for t in tables:
+        for cell in t.records.values():
+            if not isinstance(cell, dict):
+                continue
+            llm_conf = cell.pop("__llm_conf", None)
+            if isinstance(llm_conf, (int, float)):
+                try:
+                    cur = float(cell.get("confidence", 1.0))
+                    cell["confidence"] = round(min(cur, float(llm_conf)), 3)
+                except (TypeError, ValueError):
+                    pass
+    return tables
