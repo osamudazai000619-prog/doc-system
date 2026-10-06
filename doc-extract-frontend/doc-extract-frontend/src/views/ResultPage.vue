@@ -155,7 +155,7 @@
                 border
                 size="small"
                 style="width: 100%"
-                :header-cell-style="{ background: '#f5f7fa', color: '#303133', fontWeight: 600 }"
+                :header-cell-style="{ background: 'var(--de-surface-2)', color: 'var(--de-text-1)', fontWeight: 600 }"
                 :cell-class-name="() => 'editable-cell'"
               >
                 <!-- 序号列 -->
@@ -417,21 +417,21 @@ function handleNext() {
 /* ==================== 顶部说明卡 ==================== */
 .intro-card { border-radius: 8px; }
 .intro-content { display: flex; align-items: flex-start; gap: 12px; }
-.intro-icon { font-size: 24px; color: #409eff; flex-shrink: 0; margin-top: 2px; }
-.intro-title { font-size: 16px; font-weight: 600; color: #303133; margin-bottom: 6px; }
-.intro-desc { font-size: 14px; color: #606266; line-height: 1.6; margin-bottom: 10px; }
-.intro-desc strong { color: #e6a23c; }
+.intro-icon { font-size: 24px; color: var(--de-primary); flex-shrink: 0; margin-top: 2px; }
+.intro-title { font-size: 16px; font-weight: 600; color: var(--de-text-1); margin-bottom: 6px; }
+.intro-desc { font-size: 14px; color: var(--de-text-2); line-height: 1.6; margin-bottom: 10px; }
+.intro-desc strong { color: var(--de-warning); }
 .intro-desc kbd {
-  display: inline-block; padding: 1px 6px; border: 1px solid #dcdfe6;
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--de-border-strong);
   border-bottom-width: 2px; border-radius: 3px; font-size: 12px;
-  font-family: Consolas, Monaco, monospace; background-color: #f5f7fa; color: #606266;
+  font-family: Consolas, Monaco, monospace; background-color: var(--de-surface-2); color: var(--de-text-2);
 }
 .stats { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ==================== 工具栏 ==================== */
 .toolbar-card { border-radius: 8px; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; }
-.toolbar-left { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #606266; }
+.toolbar-left { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--de-text-2); }
 .toolbar-right { display: flex; gap: 8px; }
 
 /* ==================== 文件卡片 ==================== */
@@ -441,15 +441,15 @@ function handleNext() {
   cursor: pointer; user-select: none;
 }
 .file-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.file-icon { color: #409eff; font-size: 18px; }
-.file-name { font-size: 15px; font-weight: 600; color: #303133; }
+.file-icon { color: var(--de-primary); font-size: 18px; }
+.file-name { font-size: 15px; font-weight: 600; color: var(--de-text-1); }
 .file-actions { display: flex; align-items: center; gap: 8px; }
-.expand-hint { font-size: 12px; color: #909399; }
+.expand-hint { font-size: 12px; color: var(--de-text-3); }
 
 /* 展开箭头：默认向右，展开时向下 */
 .expand-icon {
   transition: transform 0.2s;
-  color: #909399;
+  color: var(--de-text-3);
 }
 .expand-icon.is-expanded {
   transform: rotate(90deg);
@@ -457,10 +457,10 @@ function handleNext() {
 
 /* ==================== 表块 ==================== */
 .table-list { display: flex; flex-direction: column; gap: 16px; }
-.table-block { background-color: #fafafa; border-radius: 6px; padding: 12px; }
+.table-block { background-color: var(--de-surface-2); border-radius: 6px; padding: 12px; }
 .table-header {
   display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
-  font-size: 14px; font-weight: 600; color: #606266;
+  font-size: 14px; font-weight: 600; color: var(--de-text-2);
 }
 .table-name { flex: 1; }
 
@@ -469,14 +469,14 @@ function handleNext() {
   min-height: 22px; padding: 2px 4px; border-radius: 3px;
   cursor: cell; transition: background-color 0.15s;
 }
-.cell-wrapper:hover { background-color: #f0f7ff; }
+.cell-wrapper:hover { background-color: var(--de-primary-soft); }
 .cell-text {
   display: block; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.cell-abnormal { color: #f56c6c; font-weight: 600; }
-.cell-abnormal-bg { background-color: #fef0f0; }
-.cell-modified-bg { background-color: #fdf6ec; }
+.cell-abnormal { color: var(--de-danger); font-weight: 600; }
+.cell-abnormal-bg { background-color: rgba(248, 113, 113, 0.12); }
+.cell-modified-bg { background-color: rgba(251, 191, 36, 0.12); }
 
 /* ==================== 底部操作栏 ==================== */
 .action-bar {

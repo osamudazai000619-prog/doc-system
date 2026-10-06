@@ -347,7 +347,7 @@ function handleVisibleChange(val) {
   justify-content: space-between;
   margin-bottom: 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--de-border);
 }
 
 .section-header .section-title {
@@ -362,23 +362,23 @@ function handleVisibleChange(val) {
   gap: 10px;
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--de-text-1);
   margin-bottom: 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--de-border);
 }
 
 .section-subtitle {
   font-size: 12px;
   font-weight: 400;
-  color: #909399;
+  color: var(--de-text-3);
 }
 
 /* ==================== 已选字段区 ==================== */
 .selected-list {
   min-height: 40px;
   padding: 8px;
-  background-color: #fafafa;
+  background-color: var(--de-surface-2);
   border-radius: 4px;
   display: flex;
   flex-wrap: wrap;
@@ -392,7 +392,7 @@ function handleVisibleChange(val) {
 
 .empty-hint {
   font-size: 13px;
-  color: #c0c4cc;
+  color: var(--de-text-3);
 }
 
 /* ==================== 预设字段区 ==================== */
@@ -405,7 +405,7 @@ function handleVisibleChange(val) {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #606266;
+  color: var(--de-text-2);
   margin-bottom: 8px;
 }
 
@@ -441,7 +441,7 @@ function handleVisibleChange(val) {
 
 .limit-hint {
   font-size: 12px;
-  color: #e6a23c;
+  color: var(--de-warning);
   margin-top: 8px;
 }
 </style>

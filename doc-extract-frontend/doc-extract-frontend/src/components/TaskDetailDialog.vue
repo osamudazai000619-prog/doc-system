@@ -155,34 +155,34 @@ function download(fileId, filename) {
 <style scoped>
 .detail-body { display: flex; flex-direction: column; gap: 16px; }
 .detail-form :deep(.el-form-item) { margin-bottom: 10px; }
-.detail-form :deep(.el-form-item__label) { font-weight: 600; color: #606266; }
-.form-text { font-size: 13px; color: #303133; word-break: break-all; }
+.detail-form :deep(.el-form-item__label) { font-weight: 600; color: var(--de-text-2); }
+.form-text { font-size: 13px; color: var(--de-text-1); word-break: break-all; }
 .field-tag { margin-right: 6px; margin-bottom: 2px; }
-.more { font-size: 12px; color: #909399; }
-.detail-block .block-title { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 8px; }
+.more { font-size: 12px; color: var(--de-text-3); }
+.detail-block .block-title { font-size: 14px; font-weight: 600; color: var(--de-text-1); margin-bottom: 8px; }
 .file-block { margin-bottom: 8px; }
 .file-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; background: #f5f7fa; border-radius: 6px;
+  padding: 8px 12px; background: var(--de-surface-2); border-radius: 6px;
 }
 .file-row-name {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; color: #303133;
+  font-size: 13px; color: var(--de-text-1);
 }
 .file-preview { margin-top: 6px; }
 .result-table { margin-bottom: 10px; }
 .prompt-box {
-  margin: 0; padding: 10px; background: #f8fafc; border-radius: 6px;
-  font-size: 13px; line-height: 1.7; color: #303133;
+  margin: 0; padding: 10px; background: var(--de-surface-2); border-radius: 6px;
+  font-size: 13px; line-height: 1.7; color: var(--de-text-1);
   white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto;
 }
 .export-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; background: #f5f7fa; border-radius: 6px; margin-bottom: 8px;
+  padding: 8px 12px; background: var(--de-surface-2); border-radius: 6px; margin-bottom: 8px;
 }
 .export-name {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; color: #303133;
+  font-size: 13px; color: var(--de-text-1);
 }
-.export-time { font-size: 12px; color: #909399; flex-shrink: 0; }
+.export-time { font-size: 12px; color: var(--de-text-3); flex-shrink: 0; }
 </style>
