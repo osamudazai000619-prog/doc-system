@@ -16,7 +16,9 @@
 :root {
   /* ---------- 品牌色 ---------- */
   --de-primary: #22d3ee;                       /* 青 —— 主色 */
-  --de-primary-2: #6366f1;                     /* 蓝紫 —— 渐变副色 */
+  --de-primary-2: #6366f1;
+  --de-primary-lite: #4dddf6;                  /* 主色 hover 亮色（渐变按钮悬浮用） */
+  --de-primary-2-lite: #7b7df5;                /* 副色 hover 亮色 */                     /* 蓝紫 —— 渐变副色 */
   --de-primary-strong: #0ea5bd;                /* 主色加深，用于 hover 文字 */
   --de-primary-soft: rgba(34, 211, 238, 0.12); /* 主色淡底 */
   --de-primary-line: rgba(34, 211, 238, 0.30); /* 主色描边 */
@@ -229,7 +231,11 @@ body {
 .el-card__body { padding: var(--de-s5); }
 
 /* ---------- 弹窗 ---------- */
+/* 提高弹窗顶部起始位置，并让正文区自行滚动：
+   否则内容多的弹窗（如「设置提取字段」有 10 类预设字段）会超出视口，
+   用户得滚动整个遮罩层才能看到底部按钮。 */
 .el-dialog {
+  --el-dialog-margin-top: 6vh;
   background: var(--de-surface-solid) !important;
   border: 1px solid var(--de-border);
   border-radius: var(--de-r-md);
@@ -237,7 +243,11 @@ body {
 }
 .el-dialog__header { border-bottom: 1px solid var(--de-border); margin-right: 0; padding-bottom: var(--de-s4); }
 .el-dialog__title { font-size: var(--de-fs-5); font-weight: 650; color: var(--de-text-1); }
-.el-dialog__body { padding: var(--de-s5); }
+.el-dialog__body {
+  padding: var(--de-s5);
+  max-height: 62vh;
+  overflow-y: auto;
+}
 
 /* ---------- 表格：保证深色下的可读性（这是深色主题最大的风险点） ---------- */
 .el-table {
@@ -271,7 +281,7 @@ body {
 }
 .el-button--primary:not(.is-text):not(.is-link):not(.is-plain):hover,
 .el-button--primary:not(.is-text):not(.is-link):not(.is-plain):focus {
-  background: linear-gradient(135deg, #4dddf6, #7b7df5);
+  background: linear-gradient(135deg, var(--de-primary-lite), var(--de-primary-2-lite));
   color: var(--de-on-primary) !important;
 }
 .el-button--primary.is-disabled,

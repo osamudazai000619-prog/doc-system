@@ -409,7 +409,7 @@ onMounted(async () => {
 }
 .new-task-btn:hover,
 .new-task-btn:focus {
-  background: linear-gradient(135deg, #4dddf6, #7b7df5);
+  background: linear-gradient(135deg, var(--de-primary-lite), var(--de-primary-2-lite));
   color: var(--de-on-primary);
   box-shadow: 0 3px 22px rgba(34, 211, 238, 0.45);
 }
