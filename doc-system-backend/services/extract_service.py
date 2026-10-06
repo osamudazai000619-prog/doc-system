@@ -18,11 +18,10 @@ from models.schemas import ExtractedTable, ExtractResponseItem, TablePlan, Table
 
 @dataclass
 class ExtractResult:
-    """提取结果对象，替代原来的纯字符串值，携带溯源/置信度/风险信息"""
+    """提取结果对象，替代原来的纯字符串值，携带溯源/风险信息"""
     value: Any
     source: Optional[Dict[str, Any]] = None          # {"para_id": int, "page": int, "start": int, "end": int}
     context: Optional[str] = None                     # 原文逐字摘录片段
-    confidence: float = 0.0                          # 0.0 ~ 1.0
     risk: Optional[List[str]] = None                 # ["not_found", "low_confidence", "conflict", ...]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -30,19 +29,18 @@ class ExtractResult:
             "value": self.value,
             "source": self.source,
             "context": self.context,
-            "confidence": self.confidence,
             "risk": self.risk if self.risk else [],
         }
 
     @classmethod
     def not_found(cls, field_name: str = "") -> "ExtractResult":
-        return cls(value=None, risk=["not_found"], confidence=0.0)
+        return cls(value=None, risk=["not_found"])
 
     @classmethod
-    def from_string(cls, text: Optional[str], confidence: float = 0.8) -> "ExtractResult":
+    def from_string(cls, text: Optional[str]) -> "ExtractResult":
         if text is None or str(text).strip() == "":
             return cls.not_found()
-        return cls(value=str(text).strip(), confidence=confidence)
+        return cls(value=str(text).strip())
 
 
 # 视为"无有效数据"的取值，校验阶段统一打 not_found 风险
@@ -59,7 +57,7 @@ def _str_value(v: Any) -> str:
     return "" if v is None else str(v)
 
 
-def _wrap_value(v: Any, confidence: float = 0.8) -> Dict[str, Any]:
+def _wrap_value(v: Any) -> Dict[str, Any]:
     """把任意值包装成 ExtractResult.to_dict() 结构（records 的最终存储格式）。
     语义占位值（'未找到'/'PARSE_ERROR'/空）统一标记 not_found。"""
     if isinstance(v, ExtractResult):
@@ -68,8 +66,8 @@ def _wrap_value(v: Any, confidence: float = 0.8) -> Dict[str, Any]:
         return v
     s = "" if v is None else str(v).strip()
     if s in _EMPTY_VALUES:
-        return ExtractResult(value=(s or None), confidence=0.0, risk=["not_found"]).to_dict()
-    return ExtractResult.from_string(s, confidence).to_dict()
+        return ExtractResult(value=(s or None), risk=["not_found"]).to_dict()
+    return ExtractResult.from_string(s).to_dict()
 
 
 def _build_table(category: str, records: Dict[str, Any]) -> ExtractedTable:
@@ -100,19 +98,11 @@ _CONF_DELIM = re.compile(
 )
 
 
-def _extract_confidence(text: str) -> Tuple[Optional[float], str]:
-    """从 'value||c:0.6||' 中抽取 LLM 自评语义置信度，多段取最小值（最保守），
-    并剥离标记返回纯文本。无标记返回 (None, text)，保证旧输出完全兼容。"""
+def _strip_conf_marks(text: str) -> str:
+    """剥离 LLM 可能残留的置信度标记 ||c:0.6||（提示词已不要求输出，仅作清理兜底）。"""
     if not text:
-        return None, text
-    vals: List[float] = []
-    for m in _CONF_DELIM.finditer(text):
-        try:
-            vals.append(max(0.0, min(1.0, float(m.group(1)))))
-        except ValueError:
-            continue
-    cleaned = _CONF_DELIM.sub("", text)
-    return (min(vals) if vals else None), cleaned
+        return text
+    return _CONF_DELIM.sub("", text)
 
 
 def _assign_pids(lines: List[str], trace_chunks: List[Dict[str, Any]]) -> List[Any]:
@@ -803,17 +793,14 @@ _EXTRACT_SYSTEM = (
     "6. 一行都没筛到：该表所有字段输出“未找到”。\n"
     "7.【段落溯源】若【文档内容】中某行以 ¶N 开头（N 为数字），则 N 是该行的段落ID。"
     "请在每个输出值后紧接追加 ||p:N|| 标注其来源段落；多行拼接时每段各自标注，"
-    "例如 北京||p:3||;上海||p:8||。无法定位段落时省略该标记（只输出纯值）。\n"
-    "8.【语义置信度】若某值属于推断/估算、表述有歧义、或原文中存在多个不一致表述，"
-    "请在该值的 ||p:N||（如有）之后追加 ||c:0.x||（x 为 0~1 的把握度，越不确定越小，"
-    "如 0.5）；逐字抄录、确信无疑的值不要加该标记。"
+    "例如 北京||p:3||;上海||p:8||。无法定位段落时省略该标记（只输出纯值）。"
 )
 
 # 分块模式追加的硬约束
 _CHUNK_EXTRACT_SYSTEM = _EXTRACT_SYSTEM + (
-    "\n9.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
+    "\n8.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
     "严禁补充块外数据。\n"
-    "10. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
+    "9. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
     "即使某列在块内每行取值相同（如国家、大洲、人口），也必须逐行重复 N 次，"
     "严禁只给一个汇总值。"
 )
@@ -827,9 +814,7 @@ _PROSE_FALLBACK_SYSTEM = (
     "2. records 的键必须与用户指定的字段完全一致，不得增删改。\n"
     "3. 文档中未明确提及的字段值输出“未找到”，不许推测捏造。\n"
     "4.【段落溯源】文档内容中以 ¶N 开头的行，N 即段落ID；请在每个输出值后追加 "
-    "||p:N|| 标注来源段落（多段各标一个），无法定位则省略。\n"
-    "5.【语义置信度】推断/估算/有歧义的值在 ||p:N|| 后追加 ||c:0.x||（0~1，越小越不确定），"
-    "逐字抄录的确信值不要加。"
+    "||p:N|| 标注来源段落（多段各标一个），无法定位则省略。"
 )
 
 
@@ -850,9 +835,8 @@ def _normalize_tables(
     for t in tables:
         records: Dict[str, Any] = {}
         for f in fields:
-            # 解析 LLM 附加的段落ID（||p:N||）与语义置信度（||c:0.x||），剥离后得到纯值
-            raw_in = str(t.records.get(f, "")).strip()
-            llm_conf, raw_in = _extract_confidence(raw_in)
+            # 解析 LLM 附加的段落ID（||p:N||），剥离后得到纯值
+            raw_in = _strip_conf_marks(str(t.records.get(f, "")).strip())
             pids, raw = _extract_para_ids(raw_in)
             segs = [s.strip() for s in re.split(r"[;；]", raw)] if raw else []
             segs = [s if s else "未找到" for s in segs]
@@ -876,19 +860,12 @@ def _normalize_tables(
             elif len(pids) > len(segs):
                 pids = pids[:len(segs)]
             joined = ";".join(segs)
-            # 包装为 ExtractResult：占位行占比越高，置信度越低；全占位则打 not_found
-            empty_ratio = sum(1 for s in segs if s in _EMPTY_VALUES) / max(len(segs), 1)
-            if empty_ratio >= 1.0:
-                cell = ExtractResult(
-                    value=joined, confidence=0.0, risk=["not_found"]
-                ).to_dict()
+            # 全为占位值则打 not_found
+            if all(s in _EMPTY_VALUES for s in segs):
+                cell = ExtractResult(value=joined, risk=["not_found"]).to_dict()
             else:
-                cell = ExtractResult(
-                    value=joined, confidence=round(1.0 - empty_ratio, 3)
-                ).to_dict()
+                cell = ExtractResult(value=joined).to_dict()
             cell["__para_ids"] = ";".join(pids)  # 临时键，_attach_trace 消费后移除
-            if llm_conf is not None:
-                cell["__llm_conf"] = llm_conf  # 临时键，_fuse_confidence 消费后移除
             records[f] = cell
         out.append(_build_table(t.table_category, records))
     return out
@@ -898,17 +875,15 @@ def _merge_chunk_tables(
     per_chunk: List[List[ExtractedTable]], fields: List[str]
 ) -> List[ExtractedTable]:
     """按块顺序、按 table_category 拼接各字段分号串，分类顺序以首次出现为准。
-    拼接时取各块的纯字符串值（兼容 ExtractResult/dict），合并后重新包装为带置信度的结构。"""
+    拼接时取各块的纯字符串值（兼容 ExtractResult/dict），合并后重新包装为统一结构。"""
     order: List[str] = []
     buckets: Dict[str, Dict[str, List[str]]] = {}
     pid_buckets: Dict[str, Dict[str, List[str]]] = {}
-    conf_buckets: Dict[str, Dict[str, List[float]]] = {}
     for tables in per_chunk:
         for t in tables:
             if t.table_category not in buckets:
                 buckets[t.table_category] = {f: [] for f in fields}
                 pid_buckets[t.table_category] = {f: [] for f in fields}
-                conf_buckets[t.table_category] = {f: [] for f in fields}
                 order.append(t.table_category)
             for f in fields:
                 buckets[t.table_category][f].append(_str_value(t.records.get(f, "未找到")))
@@ -917,28 +892,17 @@ def _merge_chunk_tables(
                 pid_buckets[t.table_category][f].extend(
                     [x for x in re.split(r"[;；]", pp) if x != ""] if pp else []
                 )
-                lc = cell.get("__llm_conf") if isinstance(cell, dict) else None
-                if isinstance(lc, (int, float)):
-                    conf_buckets[t.table_category][f].append(float(lc))
     merged: List[ExtractedTable] = []
     for cat in order:
         records: Dict[str, Any] = {}
         for f in fields:
             segs = buckets[cat][f]
             joined = ";".join(segs)
-            empty_ratio = sum(1 for s in segs if s in _EMPTY_VALUES) / max(len(segs), 1)
-            if empty_ratio >= 1.0:
-                cell = ExtractResult(
-                    value=joined, confidence=0.0, risk=["not_found"]
-                ).to_dict()
+            if all(s in _EMPTY_VALUES for s in segs):
+                cell = ExtractResult(value=joined, risk=["not_found"]).to_dict()
             else:
-                cell = ExtractResult(
-                    value=joined, confidence=round(1.0 - empty_ratio, 3)
-                ).to_dict()
+                cell = ExtractResult(value=joined).to_dict()
             cell["__para_ids"] = ";".join(pid_buckets[cat][f])
-            confs = conf_buckets[cat][f]
-            if confs:
-                cell["__llm_conf"] = min(confs)  # 跨块取最保守的语义置信度
             records[f] = cell
         merged.append(_build_table(cat, records))
     return merged
@@ -948,7 +912,7 @@ def _placeholder_tables(n_rows: int, fields: List[str], category: str) -> List[E
     """整块/半块彻底失败时的占位：每个字段补 n_rows 个"未找到"，保证段数对齐。"""
     records = {
         f: ExtractResult(
-            value=";".join(["未找到"] * n_rows), confidence=0.0, risk=["not_found"]
+            value=";".join(["未找到"] * n_rows), risk=["not_found"]
         ).to_dict()
         for f in fields
     }
@@ -1001,7 +965,7 @@ def _prune_chunk_to_columns(chunk: Dict[str, Any], keep_names: List[str]) -> Dic
 
 def _constant_records(const: Dict[str, str], fields: List[str], n_rows: int) -> Dict[str, Any]:
     """常量列记录：唯一值广播为 n_rows 段（空值记"未找到"）。
-    常量列由代码直接从源数据填充，100% 准确，置信度记 1.0。"""
+    常量列由代码直接从源数据填充，无需模型输出。"""
     rec: Dict[str, Any] = {}
     for f in fields:
         if f in const:
@@ -1009,7 +973,6 @@ def _constant_records(const: Dict[str, str], fields: List[str], n_rows: int) -> 
             is_empty = v in _EMPTY_VALUES
             rec[f] = ExtractResult(
                 value=";".join([v] * n_rows),
-                confidence=0.0 if is_empty else 1.0,
                 risk=(["not_found"] if is_empty else None),
             ).to_dict()
     return rec
@@ -1249,20 +1212,18 @@ async def _run_table_chunk(
 
 
 def _wrap_llm_tables(tables: List[ExtractedTable]) -> List[ExtractedTable]:
-    """把 LLM 直接返回的 records（值为 str）统一包装为带溯源/置信度的 dict 结构。"""
+    """把 LLM 直接返回的 records（值为 str）统一包装为带溯源信息的 dict 结构。"""
     out: List[ExtractedTable] = []
     for t in tables:
         records: Dict[str, Any] = {}
         for f, v in t.records.items():
-            llm_conf, sv = _extract_confidence(_str_value(v))
+            sv = _strip_conf_marks(_str_value(v))
             pids, sval = _extract_para_ids(sv)
             if sval in _EMPTY_VALUES:
-                cell = ExtractResult(value=sval or None, confidence=0.0, risk=["not_found"]).to_dict()
+                cell = ExtractResult(value=sval or None, risk=["not_found"]).to_dict()
             else:
-                cell = ExtractResult.from_string(sval, confidence=0.8).to_dict()
+                cell = ExtractResult.from_string(sval).to_dict()
             cell["__para_ids"] = ";".join(pids)
-            if llm_conf is not None:
-                cell["__llm_conf"] = llm_conf
             records[f] = cell
         out.append(ExtractedTable.model_construct(table_category=t.table_category, records=records))
     return out
@@ -1303,7 +1264,7 @@ async def _run_prose_chunk(
             return [ExtractedTable.model_construct(
                 table_category="解析异常",
                 records={field: ExtractResult(
-                    value="PARSE_ERROR", confidence=0.0, risk=["not_found"]
+                    value="PARSE_ERROR", risk=["not_found"]
                 ).to_dict() for field in fields},
             )]
 
@@ -1413,7 +1374,7 @@ async def extract_info_via_ai(
                 extracted_tables = [ExtractedTable.model_construct(
                     table_category="解析异常",
                     records={field: ExtractResult(
-                        value="PARSE_ERROR", confidence=0.0, risk=["not_found"]
+                        value="PARSE_ERROR", risk=["not_found"]
                     ).to_dict() for field in fields},
                 )]
             else:
@@ -1438,11 +1399,9 @@ async def extract_info_via_ai(
                     [t.table_category for t in extracted_tables],
                 )
 
-        # 溯源回填：按字段值在原文段落中做子串匹配，填充 source / context
+        # 溯源回填：按字段值逐段定位原文段落，填充 source / context / segments
         extracted_tables = _attach_trace(extracted_tables, doc_trace)
-        # 置信度融合：min(启发式置信度, LLM 语义置信度)，并清理 __llm_conf 临时键
-        extracted_tables = _fuse_confidence(extracted_tables)
-        # 最终校验：统一补打 not_found / low_confidence 风险标记
+        # 最终校验：统一补打 not_found 风险标记
         extracted_tables = validate_and_risk_mark(extracted_tables, fields)
         final_results.append(ExtractResponseItem.model_construct(
             source_file=source_file,
@@ -1455,7 +1414,6 @@ async def extract_info_via_ai(
 def validate_and_risk_mark(results: List[Any], columns: List[str]) -> List[Any]:
     """扫描所有提取结果，给有风险的字段补充 risk 标记：
     - 值为空 / "未找到" / "PARSE_ERROR" → 补 not_found
-    - 置信度低于 0.5 → 补 low_confidence
     入参兼容两种形态：List[ExtractedTable]（records 为 dict）或 List[Dict]
     （row[col] 为 ExtractResult 对象 / dict）。"""
     for row in results:
@@ -1471,16 +1429,12 @@ def validate_and_risk_mark(results: List[Any], columns: List[str]) -> List[Any]:
                 v = val.value
                 if (v is None or str(v).strip() in _EMPTY_VALUES) and "not_found" not in risk:
                     risk.append("not_found")
-                if val.confidence < 0.5 and "low_confidence" not in risk:
-                    risk.append("low_confidence")
                 val.risk = risk
             elif isinstance(val, dict):
                 risk = list(val.get("risk") or [])
                 v = val.get("value")
                 if (v is None or str(v).strip() in _EMPTY_VALUES) and "not_found" not in risk:
                     risk.append("not_found")
-                if val.get("confidence", 0) < 0.5 and "low_confidence" not in risk:
-                    risk.append("low_confidence")
                 val["risk"] = risk
     return results
 
@@ -1504,16 +1458,19 @@ def _find_trace_chunk(
 def _attach_trace(
     tables: List[ExtractedTable], trace_chunks: Optional[List[Dict[str, Any]]]
 ) -> List[ExtractedTable]:
-    """回填每个字段的 source / context。
+    """逐段回填每个字段的 source / context。
 
-    优先级（任务4）：
-      1) LLM 返回的 para_id（字段 cell 内的临时键 __para_ids，形如 "3;8"）——
-         直接按 ID 精确命中段落，杜绝重复表述导致的错配；
-      2) 降级：__para_ids 缺失或未命中时，回退到 _find_trace_chunk 的子串匹配
-         （兼容旧调用方 / LLM 未按约定标注的情形），命中同一段落逻辑。
+    cell.value 为多段分号拼接时（如散文文档把 100 个城市拼进一格），
+    每个分段独立定位来源，结果写入 cell["segments"]（与分段等长的
+    [{value, source, context}, ...]），供前端拆行后按行展示各自的来源；
+    cell 级 source / context 取首个命中段，兼容旧前端与 PDF 报告。
 
-    命中则填充 source 与 context（原文截断 200 字符），并清掉 no_source 风险；
-    未命中且字段有实际值时补 no_source 风险。临时键 __para_ids 无论命中与否都会被移除。"""
+    每段定位优先级：
+      1) LLM 按段返回的 para_id（临时键 __para_ids，形如 "3;8"，与分段一一对应）；
+      2) 降级：对该段做 _find_trace_chunk 子串匹配。
+
+    任一有值分段定位失败即补 no_source 风险；全部命中则清除该标记。
+    临时键 __para_ids 无论命中与否都会被移除。"""
     if not trace_chunks:
         # 无溯源时仍要清理临时键，避免泄漏到最终输出
         for t in tables:
@@ -1528,16 +1485,17 @@ def _attach_trace(
         if pid is not None and str(pid) not in by_pid:
             by_pid[str(pid)] = c
 
-    def _fill(cell: Dict[str, Any], hit: Dict[str, Any]) -> None:
-        cell["source"] = {
+    def _src_of(hit: Dict[str, Any]) -> Dict[str, Any]:
+        return {
             "para_id": hit.get("para_id"),
             "page": hit.get("page", 0),
             "start": hit.get("start"),
             "end": hit.get("end"),
         }
+
+    def _ctx_of(hit: Dict[str, Any]) -> str:
         ctx = hit.get("text", "") or ""
-        cell["context"] = ctx[:200] if len(ctx) > 200 else ctx
-        cell["risk"] = [r for r in (cell.get("risk") or []) if r != "no_source"]
+        return ctx[:200] if len(ctx) > 200 else ctx
 
     def _mark_no_source(cell: Dict[str, Any]) -> None:
         risk = list(cell.get("risk") or [])
@@ -1549,50 +1507,41 @@ def _attach_trace(
         for f, cell in t.records.items():
             if not isinstance(cell, dict):
                 continue
+            pids_str = cell.pop("__para_ids", "") or ""
             raw = _str_value(cell)
-            first_seg = next(
-                (s.strip() for s in re.split(r"[;；]", raw)
-                 if s.strip() and s.strip() not in _EMPTY_VALUES),
-                None,
-            )
-            if not first_seg:
+            segs = [s.strip() for s in re.split(r"[;；]", raw)]
+            if not any(s and s not in _EMPTY_VALUES for s in segs):
                 continue  # 全为占位值，无溯源可寻
+            pids = [p.strip() for p in re.split(r"[;；]", pids_str)] if pids_str else []
 
-            # 优先级 1：LLM 返回的 para_id 精确命中
-            hit: Optional[Dict[str, Any]] = None
-            pids_str = cell.get("__para_ids", "")
-            if pids_str:
-                for pid in re.split(r"[;；]", pids_str):
-                    pid = pid.strip()
-                    if pid and pid in by_pid:
-                        hit = by_pid[pid]
-                        break
+            segments: List[Dict[str, Any]] = []
+            first_hit: Optional[Dict[str, Any]] = None
+            any_miss = False
+            for i, seg in enumerate(segs):
+                entry: Dict[str, Any] = {"value": seg, "source": None, "context": None}
+                if seg and seg not in _EMPTY_VALUES:
+                    # 优先级 1：该段对应的 para_id 精确命中
+                    hit: Optional[Dict[str, Any]] = None
+                    if i < len(pids) and pids[i]:
+                        hit = by_pid.get(pids[i])
+                    # 优先级 2：降级子串匹配
+                    if hit is None:
+                        hit = _find_trace_chunk(seg, trace_chunks)
+                    if hit is not None:
+                        entry["source"] = _src_of(hit)
+                        entry["context"] = _ctx_of(hit)
+                        if first_hit is None:
+                            first_hit = hit
+                    else:
+                        any_miss = True
+                segments.append(entry)
+            cell["segments"] = segments
 
-            # 优先级 2：降级子串匹配（兼容旧调用方 / 模型未标注）
-            if hit is None:
-                hit = _find_trace_chunk(first_seg, trace_chunks)
-
-            if hit:
-                _fill(cell, hit)
-            else:
+            if first_hit is not None:
+                cell["source"] = _src_of(first_hit)
+                cell["context"] = _ctx_of(first_hit)
+                cell["risk"] = [r for r in (cell.get("risk") or []) if r != "no_source"]
+            if first_hit is None or any_miss:
                 _mark_no_source(cell)
-            cell.pop("__para_ids", None)  # 移除临时键
     return tables
 
-
-def _fuse_confidence(tables: List[ExtractedTable]) -> List[ExtractedTable]:
-    """融合置信度：cell.confidence = min(启发式置信度, LLM 语义置信度)，
-    并清理临时键 __llm_conf。LLM 未自评（无 __llm_conf）时保持启发式值不变。
-    取 min 保证「既懂语义又守规则」：任一来源存疑都压低最终置信度。"""
-    for t in tables:
-        for cell in t.records.values():
-            if not isinstance(cell, dict):
-                continue
-            llm_conf = cell.pop("__llm_conf", None)
-            if isinstance(llm_conf, (int, float)):
-                try:
-                    cur = float(cell.get("confidence", 1.0))
-                    cell["confidence"] = round(min(cur, float(llm_conf)), 3)
-                except (TypeError, ValueError):
-                    pass
-    return tables

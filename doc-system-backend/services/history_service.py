@@ -105,6 +105,37 @@ def find_export_by_file_id(file_id: str) -> Optional[Dict[str, str]]:
         return None
 
 
+def rename_task(task_id: int, title: str) -> bool:
+    """历史任务重命名（仅改显示名，不动 template_name 等业务字段）。"""
+    title = (title or "").strip()
+    if not title:
+        return False
+    with SessionLocal() as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            return False
+        task.title = title
+        session.commit()
+        return True
+
+
+def delete_tasks(task_ids: List[int]) -> int:
+    """批量删除历史任务及其导出产物登记（磁盘文件留给清理脚本回收）。"""
+    if not task_ids:
+        return 0
+    with SessionLocal() as session:
+        session.query(ExportRecord).filter(
+            ExportRecord.task_id.in_(task_ids)
+        ).delete(synchronize_session=False)
+        n = (
+            session.query(Task)
+            .filter(Task.id.in_(task_ids))
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return n
+
+
 def _task_to_list_item(task: Task, export: Optional[ExportRecord]) -> Dict[str, Any]:
     stats = json.loads(task.stats_json or "{}")
     return {
@@ -112,6 +143,7 @@ def _task_to_list_item(task: Task, export: Optional[ExportRecord]) -> Dict[str, 
         "created_at": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else "",
         "status": task.status,
         "template_name": task.template_name,
+        "title": task.title or "",
         "fields": json.loads(task.fields_json or "[]"),
         "prompt_preview": (task.prompt_snapshot or "")[:80],
         "source_files": json.loads(task.source_files_json or "[]"),
@@ -173,6 +205,7 @@ def get_task_detail(task_id: int) -> Optional[Dict[str, Any]]:
             "prompt": task.prompt_snapshot or "",
             "fields": json.loads(task.fields_json or "[]"),
             "template_name": task.template_name,
+            "title": task.title or "",
             "template_asset_id": task.template_asset_id,
             "source_files": json.loads(task.source_files_json or "[]"),
             "stats": json.loads(task.stats_json or "{}"),

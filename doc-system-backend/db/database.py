@@ -25,3 +25,18 @@ def init_db() -> None:
     from db import models  # noqa: F401  确保模型注册到 Base.metadata
 
     Base.metadata.create_all(engine)
+    _migrate_tasks_title()
+
+
+def _migrate_tasks_title() -> None:
+    """轻量迁移：旧库 tasks 表无 title 列时补列。
+    create_all 不会给已存在的表加列，需显式 ALTER。"""
+    from sqlalchemy import text  # noqa: F401
+
+    with engine.connect() as conn:
+        cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(tasks)").fetchall()]
+        if cols and "title" not in cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE tasks ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT ''"
+            )
+            conn.commit()

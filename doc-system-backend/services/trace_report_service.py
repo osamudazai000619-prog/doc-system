@@ -60,10 +60,10 @@ def _cell_meta(cell: Any) -> Dict[str, Any]:
         return {
             "source": cell.get("source"),
             "context": cell.get("context"),
-            "confidence": cell.get("confidence"),
+            "segments": cell.get("segments") or [],
             "risk": cell.get("risk") or [],
         }
-    return {"source": None, "context": None, "confidence": None, "risk": []}
+    return {"source": None, "context": None, "segments": [], "risk": []}
 
 
 def _fmt_source(source: Any) -> str:
@@ -81,15 +81,6 @@ def _fmt_source(source: Any) -> str:
     if start is not None and end is not None:
         parts.append(f"偏移 {start}-{end}")
     return "，".join(parts) if parts else "—"
-
-
-def _fmt_confidence(conf: Any) -> str:
-    if conf is None or conf == "":
-        return "—"
-    try:
-        return f"{float(conf) * 100:.0f}%"
-    except (TypeError, ValueError):
-        return str(conf)
 
 
 def _risk_labels(risks: Any) -> str:
@@ -189,7 +180,7 @@ def generate_trace_report_pdf(results: List[Dict[str, Any]]) -> bytes:
 
     # ---------- 溯源详情表格 ----------
     story.append(Paragraph("二、溯源详情", h2))
-    header = ["字段名", "提取值", "置信度", "来源段落", "原文上下文", "风险标记"]
+    header = ["字段名", "提取值", "来源段落", "原文上下文", "风险标记"]
     table_rows: List[List[Paragraph]] = [[_para(h, normal) for h in header]]
 
     for f in (results or []):
@@ -209,21 +200,36 @@ def generate_trace_report_pdf(results: List[Dict[str, Any]]) -> bytes:
                         if r in risk_counter:
                             risk_counter[r] += 1
                     label_prefix = f"[{sfile}/{cat}] " if (sfile or cat) else ""
-                    table_rows.append([
-                        _para(label_prefix + str(field), small),
-                        _para(_truncate(_cell_value(cell), 120), small),
-                        _para(_fmt_confidence(meta["confidence"]), small),
-                        _para(_fmt_source(meta["source"]), small),
-                        _para(_truncate(meta["context"] or "", 100), small),
-                        _para(_risk_labels(meta["risk"]), small),
-                    ])
+                    risk_txt = _risk_labels(meta["risk"])
+                    # 多段拼接的单元格按 segments 逐段展开：每段一行，
+                    # 各自的来源/上下文独立展示，避免整格共用首段来源造成错指
+                    segs = meta["segments"]
+                    if segs:
+                        for seg in segs:
+                            if not isinstance(seg, dict):
+                                continue
+                            table_rows.append([
+                                _para(label_prefix + str(field), small),
+                                _para(_truncate(str(seg.get("value") or ""), 120), small),
+                                _para(_fmt_source(seg.get("source")), small),
+                                _para(_truncate(seg.get("context") or "", 100), small),
+                                _para(risk_txt, small),
+                            ])
+                    else:
+                        table_rows.append([
+                            _para(label_prefix + str(field), small),
+                            _para(_truncate(_cell_value(cell), 120), small),
+                            _para(_fmt_source(meta["source"]), small),
+                            _para(_truncate(meta["context"] or "", 100), small),
+                            _para(risk_txt, small),
+                        ])
 
     if len(table_rows) == 1:
-        table_rows.append([_para("（暂无提取结果）", small)] + [_para("", small)] * 5)
+        table_rows.append([_para("（暂无提取结果）", small)] + [_para("", small)] * 4)
 
     detail_tbl = Table(
         table_rows,
-        colWidths=[34 * mm, 40 * mm, 18 * mm, 30 * mm, 34 * mm, 20 * mm],
+        colWidths=[34 * mm, 44 * mm, 34 * mm, 44 * mm, 20 * mm],
         repeatRows=1,
     )
     detail_tbl.setStyle(TableStyle([
@@ -247,7 +253,7 @@ def generate_trace_report_pdf(results: List[Dict[str, Any]]) -> bytes:
     summary_rows = [[_para(h, normal) for h in summary_header]]
     explain = {
         "not_found": "模型未从文档中提取到该字段值",
-        "low_confidence": "提取置信度较低，建议人工复核",
+        "low_confidence": "分块校验对位率不足，建议人工复核",
         "conflict": "多源结果存在冲突，需人工判定",
         "no_source": "未能定位到来源段落",
     }

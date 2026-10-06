@@ -1,9 +1,16 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.draft_service import delete_draft, get_draft, list_drafts, save_draft
+from services.draft_service import (
+    delete_draft,
+    delete_drafts,
+    get_draft,
+    list_drafts,
+    rename_draft,
+    save_draft,
+)
 
 router = APIRouter(prefix="/api", tags=["drafts"])
 
@@ -45,6 +52,28 @@ async def drafts_detail(draft_id: int):
     if detail is None:
         raise HTTPException(404, "草稿不存在")
     return detail
+
+
+class DraftRenameRequest(BaseModel):
+    title: str
+
+
+class DraftBatchDeleteRequest(BaseModel):
+    ids: List[int]
+
+
+@router.put("/drafts/{draft_id}")
+async def drafts_rename(draft_id: int, req: DraftRenameRequest):
+    """草稿重命名。"""
+    if not rename_draft(draft_id, req.title):
+        raise HTTPException(404, "草稿不存在或标题为空")
+    return {"ok": True}
+
+
+@router.post("/drafts/batch-delete")
+async def drafts_batch_delete(req: DraftBatchDeleteRequest):
+    """批量删除草稿。"""
+    return {"deleted": delete_drafts(req.ids)}
 
 
 @router.delete("/drafts/{draft_id}")

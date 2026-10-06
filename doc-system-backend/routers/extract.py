@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 from services.extract_service import extract_info_via_ai
@@ -9,6 +11,8 @@ from services.history_service import record_extraction
 from services.scheme_service import touch_scheme
 from services.upload_service import UPLOAD_META, parse_file, parse_file_with_trace
 from models.schemas import ExtractRequest, ExtractResponseItem
+from db.database import SessionLocal
+from db.models import Asset
 
 router = APIRouter(prefix="/api", tags=["extract"])
 
@@ -52,6 +56,26 @@ def _sanitize_documents(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return cleaned
 
 
+def _asset_path_by_name(fn: str) -> Optional[str]:
+    """UPLOAD_META 为内存登记，后端重启即丢失；回退到资产库按原始文件名
+    查磁盘路径（取最新一条且文件仍存在），保证重启后溯源仍可用。"""
+    if not fn:
+        return None
+    try:
+        with SessionLocal() as session:
+            asset = (
+                session.query(Asset)
+                .filter(Asset.original_name == fn)
+                .order_by(Asset.id.desc())
+                .first()
+            )
+            if asset and Path(asset.path).exists():
+                return asset.path
+    except Exception as exc:
+        logger.warning("资产库回退查询 %s 失败: %s", fn, exc)
+    return None
+
+
 def _build_trace_map(
     documents: List[Dict[str, Any]]
 ) -> Dict[str, Dict[str, Any]]:
@@ -69,8 +93,13 @@ def _build_trace_map(
     for doc in documents:
         fn = doc.get("filename")
         meta = by_name.get(fn)
-        path = meta.get("saved_path") if meta else None
+        path = meta.get("path") if meta else None
         if not path:
+            path = _asset_path_by_name(fn)
+            if path:
+                logger.info("文档 %s 不在 UPLOAD_META，回退资产库路径 %s", fn, path)
+        if not path:
+            logger.warning("文档 %s 未在 UPLOAD_META 中登记源文件路径，溯源将被跳过", fn)
             continue
         try:
             chunks = parse_file_with_trace(path)
@@ -191,6 +220,60 @@ async def get_template_headers():
     except Exception as e:
         logger.exception("获取模板表头时发生未知错误: %s", e)
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+
+
+# ========== 字段自动匹配接口 ==========
+class AutoMatchRequest(BaseModel):
+    template_fields: List[str]
+    extract_fields: List[str]
+
+
+def _norm_field(s: Any) -> str:
+    """字段名归一化：全角转半角、去全部空白、转小写。
+    使 'GDP总量（亿元）' 与 'GDP总量(亿元) ' 等写法差异不影响匹配。"""
+    s = unicodedata.normalize("NFKC", _to_str(s))
+    return re.sub(r"\s+", "", s).lower()
+
+
+@router.post("/extract/auto-match-fields")
+async def auto_match_fields(req: AutoMatchRequest):
+    """模板字段 → 提取字段自动匹配：归一化后精确同名者一一对应。
+
+    规则：
+    - 仅做确定性精确匹配（归一化后字符串相等），不做模糊/语义猜测；
+    - 一一对应：每个提取字段最多被占用一次，避免多对一错配；
+    - 匹配不上的模板字段不出现在结果中，由用户手动选择。
+    """
+    tmpl_fields = [f for f in (req.template_fields or []) if _to_str(f).strip()]
+    ext_fields = [f for f in (req.extract_fields or []) if _to_str(f).strip()]
+
+    # 提取字段按归一化名建索引（保序，重名取首个）
+    ext_index: Dict[str, str] = {}
+    for f in ext_fields:
+        key = _norm_field(f)
+        if key and key not in ext_index:
+            ext_index[key] = f
+
+    mapping: Dict[str, str] = {}
+    used = set()
+    for tf in tmpl_fields:
+        if tf in mapping:
+            continue  # 模板内重名字段只映射一次
+        key = _norm_field(tf)
+        hit = ext_index.get(key)
+        if hit is not None and hit not in used:
+            mapping[tf] = hit
+            used.add(hit)
+
+    logger.info(
+        "字段自动匹配: 模板 %d 个, 提取 %d 个, 命中 %d 个",
+        len(tmpl_fields), len(ext_fields), len(mapping),
+    )
+    return {
+        "mapping": mapping,
+        "matched": len(mapping),
+        "total": len(dict.fromkeys(tmpl_fields)),
+    }
 
 
 def _extract_xlsx_headers(path: Path) -> List[str]:

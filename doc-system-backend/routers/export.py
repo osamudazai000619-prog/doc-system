@@ -57,7 +57,7 @@ async def download_file(file_id: str):
 async def export_trace_report(data: List[Dict[str, Any]]):
     """导出当前提取结果的溯源报告 PDF。
     入参为提取结果列表（结构与 /extract 返回一致：records 的值可为
-    {value,source,context,confidence,risk} 字典或纯字符串）。
+    {value,source,context,segments,risk} 字典或纯字符串）。
     生成在独立线程池，避免阻塞事件循环。"""
     if not data:
         raise HTTPException(400, "提取结果为空，无法生成溯源报告")

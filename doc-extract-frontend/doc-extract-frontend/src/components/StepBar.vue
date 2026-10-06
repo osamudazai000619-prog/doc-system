@@ -47,69 +47,94 @@ const activeStep = computed(() => {
 
 <style scoped>
 /* ============================================================
-   步骤条：深色玻璃卡片 + 自定义圆圈
+   步骤条：无连接线 · 序号徽章（圆内嵌浅色方边）
+   ------------------------------------------------------------
+   注意：Element Plus 把 is-process / is-finish 等状态类加在
+   .el-step__head（以及标题）上，.el-step__icon 自身只有 is-text，
+   所以圆圈的状态选择器必须从 .el-step__head.is-xxx 往下写。
    ============================================================ */
 .step-bar-card {
   margin: var(--de-s4) var(--de-s6) 0;
   border-radius: var(--de-r-md);
 }
 .step-bar-card :deep(.el-card__body) {
-  padding: var(--de-s5) var(--de-s7) var(--de-s4);
+  padding: var(--de-s6) var(--de-s6) var(--de-s5);
 }
 
-/* ---------- 圆圈序号 ---------- */
+/* ---------- 连接线：全部移除 ---------- */
+.step-bar-card :deep(.el-step__line),
+.step-bar-card :deep(.el-step__line-inner) { display: none; }
+
+/* ---------- 圆圈序号：玻璃质感实心球 ---------- */
+/* head 必须保持组件默认的满宽（width:100%），由 flex 把 48px 图标推到列中心；
+   若给 head 设 width:48px，块级元素默认靠左，圆圈会跑到左上方 */
+.step-bar-card :deep(.el-step__head) {
+  display: flex;
+  justify-content: center;
+}
 .step-bar-card :deep(.el-step__icon) {
-  width: 32px;
-  height: 32px;
-  background: transparent;
-  border: 1.5px solid var(--de-border-strong);
-  color: var(--de-text-3);
-  font-size: var(--de-fs-2);
+  position: relative;
+  width: 48px;
+  height: 48px;
+  /* 白色半透明玻璃填充：左上亮、右下收，形成球体感 */
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.42));
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  /* 外柔光 + 顶部内高光 */
+  box-shadow:
+    0 0 20px rgba(200, 230, 255, 0.55),
+    inset 0 1px 5px rgba(255, 255, 255, 0.65);
+  color: #ffffff;                 /* 等待态白色亮序号 */
+  font-size: var(--de-fs-4);
+  font-weight: 700;
   transition: all 0.2s;
 }
-.step-bar-card :deep(.el-step__icon.is-text) { font-weight: 700; }
 
-/* 当前步骤：品牌渐变实心 */
-.step-bar-card :deep(.el-step.is-process .el-step__icon) {
+/* 当前步骤：青蓝渐变实心球 + 深色数字 + 青色光晕 */
+.step-bar-card :deep(.el-step__head.is-process .el-step__icon) {
   background: linear-gradient(135deg, var(--de-primary), var(--de-primary-2));
-  border-color: transparent;
+  border-color: rgba(255, 255, 255, 0.5);
   color: var(--de-on-primary);
-  box-shadow: var(--de-glow);
+  box-shadow:
+    0 0 20px rgba(34, 211, 238, 0.55),
+    inset 0 1px 3px rgba(255, 255, 255, 0.45);
 }
-/* 已完成步骤：品牌淡底 + 主色描边 */
-.step-bar-card :deep(.el-step.is-finish .el-step__icon) {
-  background: var(--de-primary-soft);
-  border-color: var(--de-primary-line);
-  color: var(--de-primary);
+/* 已完成步骤：青色玻璃球（finish-status="success" 实际类为 is-success） */
+.step-bar-card :deep(.el-step__head.is-finish .el-step__icon),
+.step-bar-card :deep(.el-step__head.is-success .el-step__icon) {
+  background: linear-gradient(145deg, rgba(34, 211, 238, 0.40), rgba(99, 102, 241, 0.28));
+  border-color: rgba(103, 232, 249, 0.6);
+  color: #eafdff;
+  box-shadow:
+    0 0 14px rgba(34, 211, 238, 0.35),
+    inset 0 1px 3px rgba(255, 255, 255, 0.3);
 }
 
 /* ---------- 标题与描述 ---------- */
-.step-bar-card :deep(.el-step__title) {
-  font-size: var(--de-fs-3);
-  font-weight: 650;
-  line-height: 32px;
-  color: var(--de-text-1);
+.step-bar-card :deep(.el-step__main) {
+  margin-top: var(--de-s2);
+  text-align: center;
 }
-.step-bar-card :deep(.el-step__title.is-process) { color: var(--de-primary); }
+.step-bar-card :deep(.el-step__title) {
+  font-size: var(--de-fs-4);
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--de-text-2);
+}
+.step-bar-card :deep(.el-step__title.is-process) {
+  color: var(--de-primary);
+  font-weight: 650;
+}
 .step-bar-card :deep(.el-step__title.is-wait) {
   color: var(--de-text-3);
   font-weight: 550;
 }
-.step-bar-card :deep(.el-step__title.is-finish) { color: var(--de-text-1); }
+.step-bar-card :deep(.el-step__title.is-finish),
+.step-bar-card :deep(.el-step__title.is-success) { color: var(--de-text-1); }
 .step-bar-card :deep(.el-step__description) {
+  margin-top: 2px;
   font-size: var(--de-fs-1);
+  line-height: 20px;
+  white-space: nowrap;      /* 四步等宽列较窄，描述强制单行，避免折成两行显乱 */
   color: var(--de-text-3);
-  padding-top: 2px;
 }
-
-/* ---------- 连接线 ---------- */
-.step-bar-card :deep(.el-step__line) {
-  top: 16px;
-  background-color: var(--de-border);
-}
-.step-bar-card :deep(.el-step__line-inner) {
-  border-color: var(--de-primary-line);
-  border-width: 1px;
-}
-.step-bar-card :deep(.el-step__head) { width: 32px; }
 </style>

@@ -63,6 +63,7 @@ class Task(Base):
         ForeignKey("assets.id"), nullable=True
     )
     template_name: Mapped[str] = mapped_column(String(255), default="")
+    title: Mapped[str] = mapped_column(String(255), default="")  # 用户可编辑的显示名
     source_files_json: Mapped[str] = mapped_column(Text, default="[]")
     status: Mapped[str] = mapped_column(String(16), default="extracted")  # extracted / exported
     stats_json: Mapped[str] = mapped_column(Text, default="{}")

@@ -102,6 +102,49 @@
         </div>
       </el-card>
 
+      <!-- 中高风险行汇总（置顶、可折叠） -->
+      <el-card
+        v-if="riskSummary.length > 0"
+        class="risk-summary-card"
+        shadow="never"
+      >
+        <template #header>
+          <div class="risk-summary-header" @click="riskSummaryOpen = !riskSummaryOpen">
+            <el-icon class="expand-icon" :class="{ 'is-expanded': riskSummaryOpen }">
+              <ArrowRight />
+            </el-icon>
+            <el-icon color="var(--de-danger)"><WarningFilled /></el-icon>
+            <span>中高风险行汇总</span>
+            <el-tag type="danger" size="small" round>{{ highCount }} 高</el-tag>
+            <el-tag type="warning" size="small" round>{{ midCount }} 中</el-tag>
+            <span class="expand-hint">
+              {{ riskSummaryOpen ? '点击折叠' : '点击展开' }}
+            </span>
+          </div>
+        </template>
+        <div v-show="riskSummaryOpen">
+          <el-table :data="riskSummary" size="small" border stripe>
+            <el-table-column label="文件" prop="file" min-width="180" show-overflow-tooltip />
+            <el-table-column label="表" prop="table" min-width="100" show-overflow-tooltip />
+            <el-table-column label="行号" prop="rowNo" width="70" align="center" />
+            <el-table-column label="风险等级" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag
+                  :type="row.level === 'high' ? 'danger' : 'warning'"
+                  size="small"
+                  effect="dark"
+                >{{ row.level === 'high' ? '高' : '中' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="风险字段" min-width="240">
+              <template #default="{ row }">
+                <span class="risk-fields-text">{{ row.fieldsText }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-card>
+
       <!-- 文件卡片列表 -->
       <el-card
         v-for="(file, fileIdx) in resultStore.results"
@@ -216,50 +259,57 @@
                   </template>
                 </el-table-column>
 
-                <!-- 溯源信息列 -->
-                <el-table-column label="溯源信息" min-width="280" align="left">
+                <!-- 风险列：取该行所有字段的最高风险 -->
+                <el-table-column label="风险" width="90" align="center">
                   <template #default="{ row }">
-                    <div class="trace-cell">
+                    <el-tag
+                      v-if="rowRiskLevel(row, getAllFields(table)) === 'high'"
+                      type="danger"
+                      size="small"
+                      effect="dark"
+                    >高</el-tag>
+                    <el-tag
+                      v-else-if="rowRiskLevel(row, getAllFields(table)) === 'mid'"
+                      type="warning"
+                      size="small"
+                      effect="plain"
+                    >中</el-tag>
+                    <span v-else class="no-risk">无风险</span>
+                  </template>
+                </el-table-column>
+
+                <!-- 详情列：点击展开该行逐字段溯源，不点击不呈现 -->
+                <el-table-column type="expand" label="详情" width="70" align="center">
+                  <template #default="{ row }">
+                    <div class="trace-detail">
+                      <div class="trace-head">
+                        <span class="trace-field">字段</span>
+                        <span class="trace-value">提取值</span>
+                        <span class="trace-source">来源段落</span>
+                        <span class="trace-context">原文上下文</span>
+                        <span class="trace-meta">风险</span>
+                      </div>
                       <div
                         v-for="field in getAllFields(table)"
                         :key="field"
                         class="trace-row"
                       >
                         <span class="trace-field">{{ field }}</span>
-                        <div class="trace-body">
-                          <!-- 来源段落：悬停显示原文片段（≤100 字） -->
-                          <el-tooltip
-                            v-if="contextText(row[field])"
-                            :content="contextText(row[field])"
-                            placement="top"
-                            :show-after="300"
-                          >
-                            <span
-                              class="trace-source"
-                              :class="{ 'trace-source-empty': !srcOf(row[field]) }"
-                            >{{ sourceText(row[field]) }}</span>
-                          </el-tooltip>
-                          <span
-                            v-else
-                            class="trace-source trace-source-empty"
-                          >{{ sourceText(row[field]) }}</span>
-                          <!-- 置信度进度条（<50% 标红） + 风险标签 -->
-                          <div class="trace-meta">
-                            <el-progress
-                              v-if="confPct(row[field]) !== null"
-                              :percentage="confPct(row[field])"
-                              :stroke-width="6"
-                              :status="confPct(row[field]) < 50 ? 'exception' : ''"
-                            />
-                            <el-tag
-                              v-for="r in riskList(row[field])"
-                              :key="r.key"
-                              size="small"
-                              effect="dark"
-                              :class="['risk-tag', `risk-tag-${r.key}`]"
-                            >{{ r.label }}</el-tag>
-                          </div>
-                        </div>
+                        <span class="trace-value">{{ cellValue(row[field]) }}</span>
+                        <span
+                          class="trace-source"
+                          :class="{ 'trace-source-empty': !srcOf(row[field]) }"
+                        >{{ sourceText(row[field]) }}</span>
+                        <span class="trace-context">{{ fullContext(row[field]) || '—' }}</span>
+                        <span class="trace-meta">
+                          <el-tag
+                            v-for="r in riskList(row[field])"
+                            :key="r.key"
+                            size="small"
+                            effect="dark"
+                            :class="['risk-tag', `risk-tag-${r.key}`]"
+                          >{{ r.label }}</el-tag>
+                        </span>
                       </div>
                       <span v-if="getAllFields(table).length === 0" class="trace-empty">—</span>
                     </div>
@@ -323,7 +373,7 @@ const router = useRouter()
 const resultStore = useResultStore()
 
 // ============================================================
-// 溯源信息展示辅助（单元格为 {value,source,context,confidence,risk}）
+// 溯源信息展示辅助（单元格为 {value,source,context,segments,risk}）
 // ============================================================
 const RISK_LABELS = {
   not_found: '未找到',
@@ -344,19 +394,62 @@ function sourceText(cell) {
   if (s.start != null && s.end != null) parts.push(`偏移 ${s.start}-${s.end}`)
   return parts.length ? parts.join('，') : '无来源'
 }
-function contextText(cell) {
-  const c = (cell && cell.context) || ''
-  if (!c) return ''
-  return c.length > 100 ? c.slice(0, 100) + '…' : c
-}
-function confPct(cell) {
-  const c = cell && cell.confidence
-  return typeof c === 'number' ? Math.round(c * 100) : null
-}
 function riskList(cell) {
   const r = (cell && cell.risk) || []
   return r.filter((k) => RISK_LABELS[k]).map((k) => ({ key: k, label: RISK_LABELS[k] }))
 }
+function fullContext(cell) {
+  return (cell && cell.context) || ''
+}
+
+// ============================================================
+// 行级风险与中高风险汇总
+// ============================================================
+const RISK_LEVEL = {
+  not_found: 'high',
+  conflict: 'high',
+  low_confidence: 'mid',
+  no_source: 'mid',
+}
+
+function rowRiskLevel(row, fields) {
+  let level = null
+  for (const f of fields) {
+    for (const k of ((row && row[f] && row[f].risk) || [])) {
+      const lv = RISK_LEVEL[k]
+      if (lv === 'high') return 'high'
+      if (lv === 'mid') level = 'mid'
+    }
+  }
+  return level
+}
+
+const riskSummary = computed(() => {
+  const items = []
+  resultStore.results.forEach((file) => {
+    ;(file.extracted_tables || []).forEach((table) => {
+      const fields = getAllFields(table)
+      ;(table.records || []).forEach((row, idx) => {
+        const level = rowRiskLevel(row, fields)
+        if (!level) return
+        const bad = fields
+          .filter((f) => ((row[f] && row[f].risk) || []).some((k) => RISK_LEVEL[k]))
+          .map((f) => `${f}：${riskList(row[f]).map((r) => r.label).join('/')}`)
+        items.push({
+          file: file.source_file,
+          table: table.table_category || '默认分类',
+          rowNo: idx + 1,
+          level,
+          fieldsText: bad.join('；') || '—',
+        })
+      })
+    })
+  })
+  return items
+})
+const highCount = computed(() => riskSummary.value.filter((i) => i.level === 'high').length)
+const midCount = computed(() => riskSummary.value.filter((i) => i.level === 'mid').length)
+const riskSummaryOpen = ref(true)
 
 // 导出溯源报告
 const exportingTrace = ref(false)
@@ -599,17 +692,41 @@ function handleNext() {
 .cell-abnormal-bg { background-color: rgba(248, 113, 113, 0.12); }
 .cell-modified-bg { background-color: rgba(251, 191, 36, 0.12); }
 
-/* ==================== 溯源信息列 ==================== */
-.trace-cell { display: flex; flex-direction: column; gap: 6px; }
-.trace-row { display: flex; flex-direction: column; gap: 3px; padding: 3px 0; border-bottom: 1px dashed #ebeef5; }
+/* ==================== 中高风险汇总 ==================== */
+.risk-summary-card { border-radius: var(--de-r-sm); border-color: rgba(248, 113, 113, 0.4); }
+.risk-summary-header {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none;
+  font-size: var(--de-fs-3); font-weight: 600; color: var(--de-text-1);
+}
+.risk-fields-text { font-size: 12px; color: var(--de-text-2); }
+
+/* ==================== 详情展开溯源（横版表格） ==================== */
+.trace-detail { padding: 10px 12px; display: flex; flex-direction: column; gap: 0; }
+.trace-head,
+.trace-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1.2fr 2fr 1fr;
+  gap: 12px; align-items: start;
+  padding: 6px 4px;
+}
+.trace-head {
+  border-bottom: 1px solid var(--de-border-strong);
+  font-size: 12px; font-weight: 600; color: var(--de-text-1);
+}
+.trace-row { border-bottom: 1px dashed var(--de-border); }
 .trace-row:last-child { border-bottom: none; }
-.trace-field { font-size: 12px; font-weight: 600; color: #303133; }
-.trace-body { display: flex; flex-direction: column; gap: 3px; }
-.trace-source { font-size: 12px; color: #409eff; cursor: default; }
-.trace-source-empty { color: #909399; }
+.trace-field { font-size: 12px; font-weight: 600; color: var(--de-text-1); word-break: break-all; }
+.trace-value { font-size: 12px; color: var(--de-text-1); word-break: break-all; }
+.trace-source { font-size: 12px; color: var(--de-primary); cursor: default; }
+.trace-source-empty { color: var(--de-text-3); }
+.trace-context {
+  font-size: 12px; color: var(--de-text-2);
+  line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+}
 .trace-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.trace-meta .el-progress { flex: 1; min-width: 70px; }
-.trace-empty { color: #c0c4cc; font-size: 12px; }
+.trace-empty { color: var(--de-text-3); font-size: 12px; }
+.no-risk { font-size: 12px; color: var(--de-text-3); }
 
 /* 风险标签配色 */
 .risk-tag { margin-right: 0; }

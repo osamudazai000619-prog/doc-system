@@ -42,24 +42,52 @@
         <div class="group-label">
           <el-icon><EditPen /></el-icon>
           <span>草稿箱</span>
-          <span class="group-count">{{ ws.drafts.length }}</span>
+          <span class="group-actions">
+            <span class="group-count">{{ ws.drafts.length }}</span>
+            <el-icon
+              v-if="!draftManage && ws.drafts.length"
+              class="group-gear"
+              title="管理"
+              @click="draftManage = true"
+            ><Setting /></el-icon>
+            <template v-else-if="draftManage">
+              <el-checkbox
+                size="small"
+                :model-value="draftSel.length === ws.drafts.length"
+                :indeterminate="draftSel.length > 0 && draftSel.length < ws.drafts.length"
+                @change="(v) => (draftSel = v ? ws.drafts.map((x) => x.id) : [])"
+              >全选</el-checkbox>
+              <el-button
+                link size="small" type="danger"
+                :disabled="!draftSel.length"
+                @click="handleBatchDeleteDrafts"
+              >删除({{ draftSel.length }})</el-button>
+              <el-button link size="small" @click="draftManage = false; draftSel = []">完成</el-button>
+            </template>
+          </span>
         </div>
         <div class="group-list">
           <div
             v-for="d in ws.drafts"
             :key="d.id"
             class="side-item"
-            :class="{ active: ws.currentDraftId === d.id }"
-            @click="handleRestore(d)"
+            :class="{ active: !draftManage && ws.currentDraftId === d.id }"
+            @click="draftManage ? toggleSel(draftSel, d.id) : handleRestore(d)"
           >
-            <el-icon class="item-icon"><ChatDotRound /></el-icon>
+            <el-checkbox
+              v-if="draftManage"
+              class="item-check"
+              :model-value="draftSel.includes(d.id)"
+            />
+            <el-icon v-else class="item-icon"><ChatDotRound /></el-icon>
             <div class="item-text">
               <div class="item-title">{{ d.title }}</div>
               <div class="item-meta">
                 {{ stepLabel(d.step) }} · {{ d.file_count }} 文件 / {{ d.field_count }} 字段
               </div>
             </div>
-            <el-icon class="item-delete" @click.stop="ws.removeDraft(d)"><Delete /></el-icon>
+            <el-icon class="item-rename" @click.stop="handleRenameDraft(d)"><EditPen /></el-icon>
+            <el-icon v-if="!draftManage" class="item-delete" @click.stop="ws.removeDraft(d)"><Delete /></el-icon>
           </div>
           <el-empty
             v-if="ws.drafts.length === 0"
@@ -73,22 +101,50 @@
         <div class="group-label">
           <el-icon><Clock /></el-icon>
           <span>历史任务</span>
-          <span class="group-count">{{ ws.historyItems.length }}</span>
+          <span class="group-actions">
+            <span class="group-count">{{ ws.historyItems.length }}</span>
+            <el-icon
+              v-if="!historyManage && ws.historyItems.length"
+              class="group-gear"
+              title="管理"
+              @click="historyManage = true"
+            ><Setting /></el-icon>
+            <template v-else-if="historyManage">
+              <el-checkbox
+                size="small"
+                :model-value="historySel.length === ws.historyItems.length"
+                :indeterminate="historySel.length > 0 && historySel.length < ws.historyItems.length"
+                @change="(v) => (historySel = v ? ws.historyItems.map((x) => x.id) : [])"
+              >全选</el-checkbox>
+              <el-button
+                link size="small" type="danger"
+                :disabled="!historySel.length"
+                @click="handleBatchDeleteHistory"
+              >删除({{ historySel.length }})</el-button>
+              <el-button link size="small" @click="historyManage = false; historySel = []">完成</el-button>
+            </template>
+          </span>
         </div>
         <div class="group-list">
           <div
             v-for="h in ws.historyItems"
             :key="h.id"
             class="side-item history-item"
-            @click="ws.openHistoryDetail(h.id)"
+            @click="historyManage ? toggleSel(historySel, h.id) : ws.openHistoryDetail(h.id)"
           >
-            <el-icon class="item-icon"><DocumentCopy /></el-icon>
+            <el-checkbox
+              v-if="historyManage"
+              class="item-check"
+              :model-value="historySel.includes(h.id)"
+            />
+            <el-icon v-else class="item-icon"><DocumentCopy /></el-icon>
             <div class="item-text">
-              <div class="item-title">{{ h.template_name || '（无模板）' }}</div>
+              <div class="item-title">{{ h.title || h.template_name || '（无模板）' }}</div>
               <div class="item-meta">
                 {{ h.created_at }} · {{ h.file_count }} 文件 / {{ h.record_count }} 记录
               </div>
             </div>
+            <el-icon class="item-rename" @click.stop="handleRenameHistory(h)"><EditPen /></el-icon>
           </div>
           <el-empty
             v-if="ws.historyItems.length === 0"
@@ -145,13 +201,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import StepBar from './components/StepBar.vue'
 import TaskDetailDialog from './components/TaskDetailDialog.vue'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { useFileStore } from '@/stores/fileStore'
 import { useResultStore } from '@/stores/resultStore'
+import { useFieldStore } from '@/stores/fieldStore'
 import { fetchSchemes } from '@/api/schemes'
 
 const route = useRoute()
@@ -159,6 +216,77 @@ const router = useRouter()
 const ws = useWorkspaceStore()
 const fileStore = useFileStore()
 const resultStore = useResultStore()
+const fieldStore = useFieldStore()
+
+// ============================================================
+// 侧边栏管理态：多选批量删除 + 重命名（草稿箱 / 历史任务）
+// ============================================================
+const draftManage = ref(false)
+const historyManage = ref(false)
+const draftSel = ref([])
+const historySel = ref([])
+
+function toggleSel(sel, id) {
+  sel.value = sel.value.includes(id)
+    ? sel.value.filter((x) => x !== id)
+    : [...sel.value, id]
+}
+
+async function handleBatchDeleteDrafts() {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${draftSel.value.length} 条草稿吗？删除后不可恢复。`,
+      '批量删除草稿',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  await ws.batchRemoveDrafts(draftSel.value)
+  draftSel.value = []
+}
+
+async function handleBatchDeleteHistory() {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${historySel.value.length} 条历史任务吗？其导出产物记录将一并删除，不可恢复。`,
+      '批量删除历史任务',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  await ws.batchRemoveHistory(historySel.value)
+  historySel.value = []
+}
+
+async function handleRenameDraft(d) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新名称', '重命名草稿', {
+      inputValue: d.title,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v) => !!(v && v.trim()) || '名称不能为空',
+    })
+    await ws.renameDraftItem(d, value.trim())
+  } catch {
+    /* 取消 */
+  }
+}
+
+async function handleRenameHistory(h) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新名称', '重命名历史任务', {
+      inputValue: h.title || h.template_name || '',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v) => !!(v && v.trim()) || '名称不能为空',
+    })
+    await ws.renameHistoryItem(h.id, value.trim())
+  } catch {
+    /* 取消 */
+  }
+}
 
 // ============================================================
 // 首次使用标记：localStorage 持久化；已有历史任务也视为已初始化
@@ -284,8 +412,10 @@ let autosaveTimer = null
 watch(
   () => [
     fileStore.allFiles,
+    fieldStore.fields,
     resultStore.prompt,
     resultStore.fields,
+    resultStore.schemeId,
     resultStore.results,
     resultStore.confirmed,
     resultStore.taskId,
@@ -550,6 +680,31 @@ onMounted(async () => {
 }
 .item-delete:hover { color: var(--de-danger); }
 .side-item:hover .item-delete { display: block; }
+
+/* ---------- 管理态（批量删除 / 重命名） ---------- */
+.group-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 400;
+}
+.item-rename {
+  display: none;
+  color: var(--de-text-3);
+  font-size: var(--de-fs-4);
+  flex-shrink: 0;
+}
+.item-rename:hover { color: var(--de-primary); }
+.side-item:hover .item-rename { display: block; }
+/* 勾选框仅展示状态，点击整行即可勾选/取消（事件由 .side-item 统一处理） */
+.item-check { margin-right: 2px; flex-shrink: 0; pointer-events: none; }
+.group-gear {
+  cursor: pointer;
+  color: var(--de-text-3);
+  font-size: var(--de-fs-4);
+}
+.group-gear:hover { color: var(--de-primary); }
 
 /* ==================== 工作区 ==================== */
 .workspace {

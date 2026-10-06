@@ -10,3 +10,11 @@ export function fetchHistoryList(page = 1, size = 20) {
 export function fetchHistoryDetail(taskId) {
   return request.get(`/history/${taskId}`)
 }
+
+export function renameHistory(taskId, title) {
+  return request.put(`/history/${taskId}`, { title })
+}
+
+export function batchDeleteHistory(ids) {
+  return request.post('/history/batch-delete', { ids })
+}

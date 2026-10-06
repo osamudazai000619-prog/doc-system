@@ -17,7 +17,7 @@ class RecordItem(BaseModel):
 
 class ExtractedTable(BaseModel):
     table_category: str
-    # 值为结构化单元格字典 {value, source, context, confidence, risk}，
+    # 值为结构化单元格字典 {value, source, context, segments, risk}，
     # 故用 Dict[str, Any]，避免 Pydantic 序列化时 “Expected str - input_type=dict” 告警。
     records: Dict[str, Any]
 

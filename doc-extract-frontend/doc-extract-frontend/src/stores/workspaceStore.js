@@ -14,16 +14,24 @@ import {
   saveDraft,
   fetchDraftDetail,
   deleteDraft,
+  renameDraft,
+  batchDeleteDrafts,
 } from '@/api/drafts'
-import { fetchHistoryList } from '@/api/history'
+import {
+  fetchHistoryList,
+  renameHistory,
+  batchDeleteHistory,
+} from '@/api/history'
 import { useFileStore } from '@/stores/fileStore'
 import { useResultStore } from '@/stores/resultStore'
+import { useFieldStore } from '@/stores/fieldStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
 
   const fileStore = useFileStore()
   const resultStore = useResultStore()
+  const fieldStore = useFieldStore()
 
   // ==================== 状态 ====================
   const currentDraftId = ref(null)
@@ -43,11 +51,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   )
 
   // 按当前 stores 推断应处于哪一步
+  // 注意：只选了方案（模板/字段/提示词已填入）但还没传目标文档时，
+  // 停留在一阶段上传页，恢复草稿不跳到二阶段
   function inferStep() {
     if (resultStore.results.length > 0) {
       return resultStore.confirmed ? '/export' : '/result'
     }
-    if (fileStore.allFiles.length > 0) return '/extract'
+    if (fileStore.validTargetFiles.length > 0) return '/extract'
     return '/upload'
   }
 
@@ -67,7 +77,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       version: 1,
       files: fileStore.allFiles,
       prompt: resultStore.prompt,
-      fields: resultStore.fields,
+      fields: fieldStore.fields.length > 0 ? [...fieldStore.fields] : resultStore.fields,
+      schemeId: resultStore.schemeId,
       results: resultStore.results,
       confirmed: resultStore.confirmed,
       taskId: resultStore.taskId,
@@ -118,7 +129,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
           file_count: fileStore.allFiles.filter(
             (f) => f.role === 'target' && f.status === 'success'
           ).length,
-          field_count: resultStore.fields.length,
+          field_count: fieldStore.fields.length || resultStore.fields.length,
           payload: buildPayload(),
           draft_id: currentDraftId.value,
         }
@@ -178,6 +189,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       currentDraftId.value = res.id
       fileStore.clearAll()
       resultStore.clearAll()
+      fieldStore.clearFields()
       await loadDrafts()
       return '/upload'
     } catch {
@@ -205,6 +217,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
       resultStore.setPrompt(p.prompt || '')
       resultStore.setFields(p.fields || [])
+      // 同步字段编辑 store：保证恢复草稿后二阶段字段标签与方案填充内容可见
+      fieldStore.setFields(p.fields || [])
+      resultStore.setSchemeId(p.schemeId || null)
       if (Array.isArray(p.results) && p.results.length) {
         resultStore.setResults(p.results)
       }
@@ -226,6 +241,57 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } catch {
       return null
     }
+  }
+
+  // ==================== 重命名 / 批量删除 ====================
+  async function renameDraftItem(draft, title) {
+    try {
+      await renameDraft(draft.id, title)
+      await loadDrafts()
+      ElMessage.success('重命名成功')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function batchRemoveDrafts(ids) {
+    try {
+      await batchDeleteDrafts(ids)
+    } catch {
+      return
+    }
+    await loadDrafts()
+    if (ids.includes(currentDraftId.value)) {
+      // 当前草稿被批量删除：清空工作区，自动续接 watcher 会恢复其余草稿
+      currentDraftId.value = null
+      fileStore.clearAll()
+      resultStore.clearAll()
+      fieldStore.clearFields()
+    }
+    ElMessage.success(`已删除 ${ids.length} 条草稿`)
+  }
+
+  async function renameHistoryItem(taskId, title) {
+    try {
+      await renameHistory(taskId, title)
+      await loadHistory()
+      ElMessage.success('重命名成功')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function batchRemoveHistory(ids) {
+    try {
+      await batchDeleteHistory(ids)
+    } catch {
+      return
+    }
+    await loadHistory()
+    if (ids.includes(historyDetailId.value)) historyDetailId.value = null
+    ElMessage.success(`已删除 ${ids.length} 条历史任务`)
   }
 
   // ==================== 删除草稿 ====================
@@ -252,6 +318,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       currentDraftId.value = null
       fileStore.clearAll()
       resultStore.clearAll()
+      fieldStore.clearFields()
     }
     ElMessage.success('草稿已删除')
   }
@@ -296,6 +363,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     createNewTask,
     restoreDraft,
     removeDraft,
+    renameDraftItem,
+    batchRemoveDrafts,
+    renameHistoryItem,
+    batchRemoveHistory,
     openHistoryDetail,
     markCompleted,
     setTaskCompleted,

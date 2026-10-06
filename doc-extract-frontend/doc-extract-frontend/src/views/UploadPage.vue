@@ -11,12 +11,47 @@
         <div class="intro-text">
           <div class="intro-title">上传文档</div>
           <div class="intro-desc">
-            请先上传<strong>目标文档</strong>（要提取信息的文件）和
+            可先<strong>选择方案</strong>一键填入模板、提取字段与提示词；
+            也可以直接上传<strong>目标文档</strong>（要提取信息的文件）和
             <strong>模板文件</strong>（要填充的 Word 或 Excel）。
             支持格式：docx / txt / md / xlsx / pdf。
           </div>
         </div>
       </div>
+    </el-card>
+
+    <!-- ==================================================
+         选择方案（可选）：一键填入模板文件 + 提取字段 + 提示词
+         ================================================== -->
+    <el-card class="scheme-card" shadow="never">
+      <template #header>
+        <div class="scheme-header">
+          <div class="scheme-title">
+            <el-icon><Collection /></el-icon>
+            <span>选择方案</span>
+            <el-tag size="small" type="info" round>可选</el-tag>
+          </div>
+          <el-button size="small" text type="primary" @click="router.push('/schemes')">
+            <el-icon><SetUp /></el-icon>
+            <span>管理方案</span>
+          </el-button>
+        </div>
+      </template>
+      <el-select
+        v-model="selectedSchemeId"
+        placeholder="从已有方案一键填入模板、字段和提示词（也可不选，手动上传）"
+        clearable
+        :loading="schemesLoading"
+        style="width: 100%"
+        @change="onSchemeChange"
+      >
+        <el-option
+          v-for="s in schemeOptions"
+          :key="s.id"
+          :label="s.name + (s.template_name ? ' — ' + s.template_name : '')"
+          :value="s.id"
+        />
+      </el-select>
     </el-card>
 
     <!-- 两个上传卡片并排 -->
@@ -158,7 +193,7 @@
 
 <script setup>
 import request from '@/api/request'
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -166,7 +201,7 @@ import { useFileStore } from '@/stores/fileStore'
 import { useResultStore } from '@/stores/resultStore'
 import { useFieldStore } from '@/stores/fieldStore'
 import { fetchAssets, loadAsset } from '@/api/assets'
-import { fetchRecommendation } from '@/api/schemes'
+import { fetchSchemes, fetchRecommendation } from '@/api/schemes'
 import FileUploadCard from '@/components/FileUploadCard.vue'
 import FileStatusTable from '@/components/FileStatusTable.vue'
 import DocumentPreview from '@/components/DocumentPreview.vue'
@@ -181,6 +216,44 @@ const previewFile = ref(null)
 
 const canUpload = computed(() => fileStore.targetFiles.length > 0)
 const canGoNext = computed(() => fileStore.validTargetFiles.length > 0)
+
+// ======== 选择方案（一阶段入口，填入模板/字段/提示词） ========
+const selectedSchemeId = ref(resultStore.schemeId || null)
+const schemeOptions = ref([])
+const schemesLoading = ref(false)
+
+onMounted(async () => {
+  schemesLoading.value = true
+  try {
+    const res = await fetchSchemes()
+    schemeOptions.value = res.items || []
+  } catch {
+    // 方案列表加载失败不阻断上传主流程
+  } finally {
+    schemesLoading.value = false
+  }
+})
+
+// 选中方案 → 一键填入：模板文件（从文件库拉取解析结果）+ 提取字段 + 提示词；
+// 字段与提示词写入 store，二阶段页面进入时直接带出，可继续修改
+async function onSchemeChange(id) {
+  resultStore.setSchemeId(id || null)
+  if (!id) return
+  const scheme = schemeOptions.value.find((s) => s.id === id)
+  if (!scheme) return
+  fieldStore.setFields(scheme.fields || [])
+  resultStore.setFields(scheme.fields || [])
+  resultStore.setPrompt(scheme.prompt || '')
+  if (scheme.template_asset_id) {
+    try {
+      const item = await loadAsset(scheme.template_asset_id)
+      fileStore.upsertParsedFile(item)
+    } catch {
+      // 拦截器已提示（如模板文件已被删除）；字段与提示词填充不受影响
+    }
+  }
+  ElMessage.success(`已应用方案「${scheme.name}」：模板/字段/提示词已填入，可继续修改`)
+}
 
 // ======== 目标文档 ========
 function onAddTarget(files) { fileStore.addFile('target', files) }
@@ -231,6 +304,8 @@ async function handleClearAll() {
     fileStore.clearAll()
     previewFile.value = null
     recommend.value = null
+    selectedSchemeId.value = null
+    resultStore.setSchemeId(null)
     ElMessage.success('已清空')
   } catch {}
 }
@@ -353,6 +428,11 @@ function acceptRecommend() {
 }
 .intro-desc { font-size: var(--de-fs-3); color: var(--de-text-2); line-height: 1.7; }
 .intro-desc strong { color: var(--de-primary); font-weight: 650; }
+
+/* ---------- 方案选择卡 ---------- */
+.scheme-card { border-radius: var(--de-r-md); }
+.scheme-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.scheme-title { display: flex; align-items: center; gap: 8px; font-size: var(--de-fs-4); font-weight: 600; color: var(--de-text-1); }
 
 /* ---------- 两个上传卡片并排 ---------- */
 .upload-row {

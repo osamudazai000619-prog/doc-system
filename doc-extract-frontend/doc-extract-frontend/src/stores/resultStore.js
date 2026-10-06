@@ -11,8 +11,9 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 // ------------------------------------------------------------
-// 单元格统一为 { value, source, context, confidence, risk } 结构。
-// 兼容后端返回的 dict 单元格（带溯源）与旧的纯字符串两种形态。
+// 单元格统一为 { value, source, context, segments, risk } 结构。
+// segments：多段拼接值逐段的溯源信息 [{value, source, context}, ...]，
+// 供拆行后按行展示各自来源。兼容后端返回的 dict 单元格与旧的纯字符串两种形态。
 // ------------------------------------------------------------
 export function cellValue(cell) {
   if (cell && typeof cell === 'object') return String(cell.value ?? '')
@@ -25,7 +26,7 @@ export function normalizeCell(cell) {
       value: cell.value ?? '',
       source: cell.source ?? null,
       context: cell.context ?? null,
-      confidence: typeof cell.confidence === 'number' ? cell.confidence : null,
+      segments: Array.isArray(cell.segments) ? cell.segments : null,
       risk: Array.isArray(cell.risk) ? cell.risk : [],
     }
   }
@@ -33,7 +34,7 @@ export function normalizeCell(cell) {
     value: cell ?? '',
     source: null,
     context: null,
-    confidence: null,
+    segments: null,
     risk: [],
   }
 }
@@ -90,6 +91,11 @@ export const useResultStore = defineStore('result', () => {
    * 本次提取落库的任务历史 id（后端提取响应带回；导出时回传用于产物关联）
    */
   const taskId = ref('')
+
+  /**
+   * 当前选中的方案 id（一阶段选择，提取时随 payload 上送；空为未选）
+   */
+  const schemeId = ref(null)
 
   /**
    * 是否有未保存的修改
@@ -193,7 +199,8 @@ export const useResultStore = defineStore('result', () => {
     // 没有任何字段含分号列表，原样返回
     if (maxLen <= 1) return records
 
-    // 拆分后每段克隆原单元格（保留溯源 source/context/confidence/risk），仅替换 value
+    // 拆分后每段克隆原单元格并替换 value；若后端提供了逐段溯源 segments，
+    // 第 i 行取 segments[i] 的 source/context，避免所有行共用首段来源造成错指
     const rows = []
     for (let i = 0; i < maxLen; i++) {
       const row = {}
@@ -204,7 +211,13 @@ export const useResultStore = defineStore('result', () => {
         if (parts.length === 1) seg = parts[0]          // 单值字段广播
         else if (i < parts.length) seg = parts[i]
         else seg = '未找到'                              // 长度不齐的缺失位
-        row[k] = { ...base, value: seg }
+        const segTrace = Array.isArray(base.segments) ? base.segments[i] : null
+        row[k] = {
+          ...base,
+          value: seg,
+          source: segTrace ? (segTrace.source ?? null) : base.source,
+          context: segTrace ? (segTrace.context ?? null) : base.context,
+        }
       })
       rows.push(row)
     }
@@ -244,7 +257,7 @@ export const useResultStore = defineStore('result', () => {
     const record = (table.records || [])[recordIndex]
     if (!record) return
 
-    // 编辑只改 value，保留原溯源（source/context/confidence/risk）
+    // 编辑只改 value，保留原溯源（source/context/segments/risk）
     record[field] = { ...normalizeCell(record[field]), value: String(value ?? '') }
     dirty.value = true
   }
@@ -271,6 +284,11 @@ export const useResultStore = defineStore('result', () => {
   }
 
 
+  function setSchemeId(id) {
+    schemeId.value = id || null
+  }
+
+
   function setDirty(val) {
     dirty.value = !!val
   }
@@ -283,6 +301,7 @@ export const useResultStore = defineStore('result', () => {
     confirmed.value = false
     dirty.value = false
     taskId.value = ''
+    schemeId.value = null
   }
 
   return {
@@ -294,6 +313,7 @@ export const useResultStore = defineStore('result', () => {
     confirmed,
     dirty,
     taskId,
+    schemeId,
     // getters
     isEmpty,
     totalRecords,
@@ -307,6 +327,7 @@ export const useResultStore = defineStore('result', () => {
     setFields,
     setConfirmed,
     setTaskId,
+    setSchemeId,
     setDirty,
     clearAll,
   }

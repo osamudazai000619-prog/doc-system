@@ -61,11 +61,22 @@
               <span>字段映射</span>
               <el-tag type="warning" size="small" round>模板字段 → 提取字段</el-tag>
             </div>
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :loading="autoMatching"
+              :disabled="isExporting || !templateFields.length || !extractFieldOptions.length"
+              @click="runAutoMatch(false)"
+            >
+              一键匹配
+            </el-button>
           </div>
         </template>
 
         <div class="mapping-tip">
-          💡 请选择每个模板字段对应的提取字段。如果某个模板字段不需要填充，可以留空。
+          💡 同名字段已自动对应，不一致的请手动选择；不需要填充的模板字段可留空。
+          <span v-if="autoMatchInfo" class="auto-match-info">（{{ autoMatchInfo }}）</span>
         </div>
 
         <div class="mapping-list">
@@ -212,6 +223,7 @@ import { useFileStore } from '@/stores/fileStore'
 import { useResultStore, cellValue } from '@/stores/resultStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { saveScheme } from '@/api/schemes'
+import { autoMatchFields } from '@/api/extract'
 import request from '@/api/request'
 
 const router = useRouter()
@@ -291,6 +303,50 @@ const extractFieldOptions = computed(() => {
   }
   return resultStore.allFieldNames || []
 })
+
+// ========== 字段自动匹配（后端归一化精确匹配，一一对应） ==========
+const autoMatching = ref(false)
+const autoMatchInfo = ref('')
+let autoMatchDone = false
+
+async function runAutoMatch(silent = false) {
+  if (autoMatching.value) return
+  if (!templateFields.value.length || !extractFieldOptions.value.length) return
+  autoMatching.value = true
+  try {
+    const res = await autoMatchFields(templateFields.value, extractFieldOptions.value)
+    const hits = res.mapping || {}
+    const next = { ...mapping.value }
+    let filled = 0
+    for (const [tf, ef] of Object.entries(hits)) {
+      // 只填空位，不覆盖用户已手动选择的映射
+      if (!next[tf]) {
+        next[tf] = ef
+        filled++
+      }
+    }
+    mapping.value = next
+    autoMatchInfo.value = res.matched > 0
+      ? `已自动匹配 ${res.matched}/${res.total} 个同名字段`
+      : ''
+    if (!silent) {
+      if (filled > 0) ElMessage.success(`一键匹配完成：${filled} 个字段已对应`)
+      else if (res.matched > 0) ElMessage.info('同名字段均已匹配，无新增')
+      else ElMessage.warning('未发现同名字段，请手动选择')
+    }
+  } catch (e) {
+    if (!silent) ElMessage.error('自动匹配失败，请手动选择')
+  } finally {
+    autoMatching.value = false
+  }
+}
+
+// 两侧字段就绪后自动匹配一次（静默），匹配不上的留给用户手动选择
+watch([templateFields, extractFieldOptions], ([tf, ef]) => {
+  if (autoMatchDone || !tf.length || !ef.length) return
+  autoMatchDone = true
+  runAutoMatch(true)
+}, { immediate: true })
 
 const isMappingComplete = computed(() => {
   return Object.values(mapping.value).some((val) => val !== '')
@@ -529,6 +585,7 @@ async function handleStartNew() {
 .template-icon { color: var(--de-primary); flex-shrink: 0; }
 .template-name { flex: 1; color: var(--de-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mapping-tip { font-size: var(--de-fs-2); color: var(--de-text-3); margin-bottom: 16px; }
+.auto-match-info { color: var(--de-primary); }
 .mapping-list { display: flex; flex-direction: column; gap: 14px; }
 .mapping-group-title {
   display: flex; align-items: center; gap: 8px;

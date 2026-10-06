@@ -18,3 +18,11 @@ export function fetchDraftDetail(id) {
 export function deleteDraft(id) {
   return request.delete(`/drafts/${id}`)
 }
+
+export function renameDraft(id, title) {
+  return request.put(`/drafts/${id}`, { title })
+}
+
+export function batchDeleteDrafts(ids) {
+  return request.post('/drafts/batch-delete', { ids })
+}

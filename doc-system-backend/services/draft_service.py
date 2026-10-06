@@ -83,6 +83,34 @@ def save_draft(
         return {"id": draft.id, "evicted": evicted}
 
 
+def rename_draft(draft_id: int, title: str) -> bool:
+    """草稿重命名；空标题拒绝（避免列表出现空白条目）。"""
+    title = (title or "").strip()
+    if not title:
+        return False
+    with SessionLocal() as session:
+        d = session.get(Draft, draft_id)
+        if d is None:
+            return False
+        d.title = title
+        session.commit()
+        return True
+
+
+def delete_drafts(draft_ids: List[int]) -> int:
+    """批量删除草稿，返回实际删除条数。"""
+    if not draft_ids:
+        return 0
+    with SessionLocal() as session:
+        n = (
+            session.query(Draft)
+            .filter(Draft.id.in_(draft_ids))
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return n
+
+
 def list_drafts() -> List[Dict[str, Any]]:
     """草稿列表（按更新时间倒序），只回摘要不回 payload。"""
     with SessionLocal() as session:

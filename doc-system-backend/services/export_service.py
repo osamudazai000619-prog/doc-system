@@ -13,6 +13,10 @@ from openpyxl import load_workbook
 
 from services.history_service import find_export_by_file_id, record_export
 from services.upload_service import UPLOAD_META, parse_file
+from db.database import SessionLocal
+from db.models import Asset
+
+logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("uploads") / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -455,6 +459,32 @@ def fill_word_template(
     return filled
 
 
+def _asset_template_by_name(template_name: str) -> Optional[Dict[str, Any]]:
+    """UPLOAD_META 重启即丢；回退资产库按原始文件名查模板磁盘路径。"""
+    if not template_name:
+        return None
+    try:
+        with SessionLocal() as session:
+            asset = (
+                session.query(Asset)
+                .filter(
+                    Asset.role == "template",
+                    Asset.original_name == template_name,
+                )
+                .order_by(Asset.id.desc())
+                .first()
+            )
+            if asset and Path(asset.path).exists():
+                return {
+                    "path": asset.path,
+                    "original_name": asset.original_name,
+                    "ext": Path(asset.path).suffix.lower(),
+                }
+    except Exception as exc:
+        logger.warning("资产库回退查询模板 %s 失败: %s", template_name, exc)
+    return None
+
+
 # ============ 导出入口 ============
 async def generate_exported_file(
     confirmed_data: List[Dict[str, Any]], template_name: str, task_id: str = ""
@@ -470,13 +500,19 @@ async def generate_exported_file(
     for meta in UPLOAD_META.values():
         if meta["role"] == "template" and meta["original_name"] == template_name:
             template_meta = meta  # 后写覆盖前写 -> 同名取最近上传
+
+    # UPLOAD_META 为内存登记，后端重启即丢失；草稿恢复的导出请求需回退
+    # 资产库按模板名查磁盘路径（role=template，取最新一条且文件仍存在）
+    if not template_meta:
+        template_meta = _asset_template_by_name(template_name)
+
     if not template_meta:
         raise HTTPException(404, f"未找到模板文件「{template_name}」，请先上传模板")
 
     template_path = Path(template_meta["path"])
     if not template_path.exists():
         raise HTTPException(404, "模板文件已丢失，请重新上传")
-    template_ext = template_meta["ext"]
+    template_ext = template_meta.get("ext") or template_path.suffix.lower()
     if template_ext not in (".docx", ".xlsx"):
         raise HTTPException(400, f"模板仅支持 docx/xlsx，当前：{template_ext}")
 
