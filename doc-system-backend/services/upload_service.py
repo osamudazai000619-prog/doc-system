@@ -1,10 +1,12 @@
 import logging
+import os
 import re
 import uuid
 import zipfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from xml.etree import ElementTree as ET
 
 from fastapi import UploadFile
@@ -14,6 +16,31 @@ from docx import Document
 from openpyxl import load_workbook
 
 from services.asset_service import register_asset
+
+
+@dataclass
+class ParseChunk:
+    """解析段落块，包含溯源元数据"""
+    para_id: int
+    page: int
+    start: int
+    end: int
+    text: str
+
+    def to_dict(self):
+        return {
+            "para_id": self.para_id,
+            "page": self.page,
+            "start": self.start,
+            "end": self.end,
+            "text": self.text,
+        }
+
+
+def _chunks_to_text(chunks: List[ParseChunk]) -> str:
+    """将 ParseChunk 列表转回纯文本，兼容旧代码"""
+    return "\n".join(c.text for c in chunks)
+
 
 BASE_DIR = Path("uploads")
 TARGET_DIR = BASE_DIR / "targets"
@@ -720,3 +747,44 @@ async def process_upload_files(
                 "asset_id": asset_id,  # 增量字段：文件资产库 id，供推荐/方案引用
             })
     return results
+
+
+def parse_file_with_trace(file_path: str, file_type: Optional[str] = None) -> List[ParseChunk]:
+    """带溯源的解析入口，返回 ParseChunk 列表"""
+    # 1. 确定文件类型
+    if file_type is None:
+        ext = os.path.splitext(file_path)[1].lower()
+        type_map = {'.docx': 'docx', '.doc': 'docx', '.xlsx': 'xlsx', '.pdf': 'pdf'}
+        file_type = type_map.get(ext, 'text')
+
+    # 2. 调用已有解析函数获取纯文本（统一转 Path 保证兼容）
+    p = Path(file_path)
+    if file_type == 'docx':
+        full_text = parse_docx(p)
+    elif file_type == 'xlsx':
+        full_text = parse_xlsx(p)
+    elif file_type == 'pdf':
+        full_text = parse_pdf(p)
+    else:
+        full_text = read_text_file(p)
+
+    # 3. 按段落切分并分配 para_id 和字符偏移
+    paragraphs = [pg for pg in full_text.split('\n') if pg.strip()]
+    chunks: List[ParseChunk] = []
+    char_pos = 0
+    for i, pg in enumerate(paragraphs):
+        start = char_pos
+        end = start + len(pg)
+        chunks.append(ParseChunk(
+            para_id=i, page=0, start=start, end=end, text=pg
+        ))
+        char_pos = end + 1  # +1 给换行符留位置
+
+    return chunks
+
+
+def parse_file_text(content):
+    """兼容旧代码：如果传入的是 ParseChunk 列表，转回纯文本；否则原样返回"""
+    if isinstance(content, list) and len(content) > 0 and isinstance(content[0], ParseChunk):
+        return _chunks_to_text(content)
+    return content

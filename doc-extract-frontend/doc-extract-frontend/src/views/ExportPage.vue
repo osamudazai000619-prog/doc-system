@@ -209,7 +209,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFileStore } from '@/stores/fileStore'
-import { useResultStore } from '@/stores/resultStore'
+import { useResultStore, cellValue } from '@/stores/resultStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { saveScheme } from '@/api/schemes'
 import request from '@/api/request'
@@ -401,7 +401,10 @@ async function handleExport() {
     extracted_tables: (file.extracted_tables || []).flatMap((table) =>
       (table.records || []).map((rec) => ({
         table_category: table.table_category || '',
-        records: rec,
+        // 单元格为带溯源的对象，导出 Excel 只取纯值
+        records: Object.fromEntries(
+          Object.entries(rec).map(([k, v]) => [k, cellValue(v)])
+        ),
       }))
     ),
   }))

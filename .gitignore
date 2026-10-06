@@ -32,3 +32,6 @@ doc-system-backend/uploads/
 # Runtime data (SQLite)
 doc-system-backend/data/
 
+# 模型发现缓存（运行时自动生成）
+.models_cache.json
+
