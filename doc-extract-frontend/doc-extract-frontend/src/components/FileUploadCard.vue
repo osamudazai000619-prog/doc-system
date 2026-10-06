@@ -11,7 +11,7 @@
 <template>
   <el-card class="upload-card" shadow="never">
 
-    <!-- ============ 卡片头部：标题 + 清空按钮 ============ -->
+    <!-- ============ 卡片头部：标题 + 卡片级操作 ============ -->
     <template #header>
       <div class="card-header">
         <div class="card-title">
@@ -21,15 +21,19 @@
             已选 {{ files.length }} 个
           </el-tag>
         </div>
-        <el-button
-          v-if="files.length > 0"
-          type="danger"
-          size="small"
-          plain
-          @click="handleClear"
-        >
-          清空
-        </el-button>
+        <div class="card-actions">
+          <!-- 交给使用方插入卡片级操作（例如「从文件库选择模板」） -->
+          <slot name="header-actions" />
+          <el-button
+            v-if="files.length > 0"
+            type="danger"
+            size="small"
+            plain
+            @click="handleClear"
+          >
+            清空
+          </el-button>
+        </div>
       </div>
     </template>
 
@@ -161,8 +165,18 @@ function handleClear() {
 
 <style scoped>
 /* ==================== 卡片 ==================== */
+/* 卡片与拖拽区撑满父容器高度，避免页面下方出现大片空白 */
 .upload-card {
-  border-radius: 8px;
+  border-radius: var(--de-r-md);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.upload-card :deep(.el-card__body) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ==================== 卡片头部 ==================== */
@@ -175,97 +189,124 @@ function handleClear() {
 .card-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: #303133;
+  gap: var(--de-s2);
+  font-size: var(--de-fs-4);
+  font-weight: 650;
+  color: var(--de-text-1);
+}
+.card-title .el-icon { color: var(--de-primary); font-size: var(--de-fs-5); }
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--de-s2);
 }
 
 /* ==================== 上传区域 ==================== */
 .upload-area {
   width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* 让 el-upload 的拖拽区域占满宽度 */
+/* 让 el-upload 的拖拽区域占满宽度与剩余高度 */
 .upload-area :deep(.el-upload) {
   width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .upload-area :deep(.el-upload-dragger) {
   width: 100%;
-  padding: 32px 16px;
-  border-radius: 6px;
+  height: 100%;
+  min-height: 180px;
+  padding: var(--de-s6) var(--de-s4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed var(--de-border-strong);
+  border-radius: var(--de-r-md);
+  background: var(--de-surface-2);
   transition: border-color 0.2s, background-color 0.2s;
 }
 
-/* hover 时加深边框 */
+/* hover 时切到品牌色 */
 .upload-area :deep(.el-upload-dragger:hover) {
-  border-color: #409eff;
-  background-color: #f0f9ff;
+  border-color: var(--de-primary);
+  background: var(--de-primary-soft);
 }
 
 .upload-icon {
-  font-size: 48px;
-  color: #c0c4cc;
-  margin-bottom: 12px;
+  font-size: 46px;
+  color: var(--de-primary);
+  opacity: 0.85;
+  margin-bottom: var(--de-s3);
 }
 
 .upload-text {
-  font-size: 14px;
-  color: #606266;
+  font-size: var(--de-fs-3);
+  color: var(--de-text-2);
 }
 
 .upload-text em {
-  color: #409eff;
+  color: var(--de-primary);
   font-style: normal;
+  font-weight: 650;
 }
 
 .upload-tip {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 8px;
+  font-size: var(--de-fs-1);
+  color: var(--de-text-3);
+  margin-top: var(--de-s2);
 }
 
-/* ==================== 文件列表 ==================== */
+/* ==================== 已选文件列表 ==================== */
 .file-list {
-  margin-top: 16px;
+  margin-top: var(--de-s4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--de-s2);
 }
 
 .file-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  background-color: #f5f7fa;
-  border-radius: 4px;
-  transition: background-color 0.2s;
+  padding: var(--de-s2) var(--de-s3);
+  background: var(--de-surface-2);
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-sm);
+  transition: border-color 0.18s, background-color 0.18s;
 }
 
 .file-item:hover {
-  background-color: #ecf5ff;
+  border-color: var(--de-primary-line);
+  background: var(--de-surface-1);
 }
 
 .file-item-left {
   display: flex;
   align-items: center;
-  gap: 8px;
-  overflow: hidden;   /* 溢出裁剪，让文件名太长时显示省略号 */
+  gap: var(--de-s2);
+  overflow: hidden;
   flex: 1;
 }
 
 .file-icon {
-  color: #409eff;
+  color: var(--de-primary);
   flex-shrink: 0;
 }
 
 .file-name {
-  font-size: 14px;
-  color: #303133;
-  white-space: nowrap;      /* 不换行 */
-  overflow: hidden;         /* 超出隐藏 */
-  text-overflow: ellipsis;  /* 显示省略号 */
+  font-size: var(--de-fs-2);
+  color: var(--de-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

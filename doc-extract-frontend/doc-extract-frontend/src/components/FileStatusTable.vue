@@ -28,7 +28,7 @@
       stripe
       border
       style="width: 100%"
-      :header-cell-style="{ background: '#f5f7fa', color: '#303133', fontWeight: 600 }"
+      :header-cell-style="{ background: 'var(--de-surface-2)', color: 'var(--de-text-1)', fontWeight: 600 }"
     >
       <!-- 序号列 -->
       <el-table-column
@@ -181,7 +181,7 @@ function handlePreview(row) {
 
 <style scoped>
 .status-card {
-  border-radius: 8px;
+  border-radius: var(--de-r-sm);
 }
 
 .card-header {
@@ -194,9 +194,9 @@ function handlePreview(row) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: var(--de-fs-4);
   font-weight: 600;
-  color: #303133;
+  color: var(--de-text-1);
 }
 
 .filename-cell {
@@ -206,12 +206,12 @@ function handlePreview(row) {
 }
 
 .file-icon {
-  color: #409eff;
+  color: var(--de-primary);
   flex-shrink: 0;
 }
 
 .no-action {
-  color: #c0c4cc;
+  color: var(--de-text-3);
 }
 
 /* error 状态：报错原因顶替状态标签，红色 + 省略号 + 悬停看全文 */
@@ -219,8 +219,8 @@ function handlePreview(row) {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: #f56c6c;
-  font-size: 13px;
+  color: var(--de-danger);
+  font-size: var(--de-fs-2);
   line-height: 1.4;
 }
 .error-text .el-icon {

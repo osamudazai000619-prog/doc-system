@@ -347,7 +347,7 @@ function handleVisibleChange(val) {
   justify-content: space-between;
   margin-bottom: 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--de-border);
 }
 
 .section-header .section-title {
@@ -360,26 +360,26 @@ function handleVisibleChange(val) {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
+  font-size: var(--de-fs-3);
   font-weight: 600;
-  color: #303133;
+  color: var(--de-text-1);
   margin-bottom: 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--de-border);
 }
 
 .section-subtitle {
-  font-size: 12px;
+  font-size: var(--de-fs-1);
   font-weight: 400;
-  color: #909399;
+  color: var(--de-text-3);
 }
 
 /* ==================== 已选字段区 ==================== */
 .selected-list {
   min-height: 40px;
   padding: 8px;
-  background-color: #fafafa;
-  border-radius: 4px;
+  background-color: var(--de-surface-2);
+  border-radius: var(--de-r-xxs);
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -391,8 +391,8 @@ function handleVisibleChange(val) {
 }
 
 .empty-hint {
-  font-size: 13px;
-  color: #c0c4cc;
+  font-size: var(--de-fs-2);
+  color: var(--de-text-3);
 }
 
 /* ==================== 预设字段区 ==================== */
@@ -404,8 +404,8 @@ function handleVisibleChange(val) {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
-  color: #606266;
+  font-size: var(--de-fs-2);
+  color: var(--de-text-2);
   margin-bottom: 8px;
 }
 
@@ -440,8 +440,8 @@ function handleVisibleChange(val) {
 }
 
 .limit-hint {
-  font-size: 12px;
-  color: #e6a23c;
+  font-size: var(--de-fs-1);
+  color: var(--de-warning);
   margin-top: 8px;
 }
 </style>

@@ -1,295 +1,386 @@
+/* ============================================================
+   文档提取系统 · 设计系统（Design System）
+   ------------------------------------------------------------
+   这个文件是整套 UI 的唯一风格来源，分三部分：
+     1. 设计 token —— 颜色 / 字号 / 间距 / 圆角 / 阴影
+     2. Element Plus 主题覆盖
+     3. 全局基础样式与共享类
+
+   约定：任何页面、组件都不要再硬编码颜色值，
+        一律引用下面的 --de-* 变量。换肤只需改这一处。
+   ============================================================ */
+
+/* ============================================================
+   1. 设计 token
+   ============================================================ */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* ---------- 品牌色 ---------- */
+  --de-primary: #22d3ee;                       /* 青 —— 主色 */
+  --de-primary-2: #6366f1;
+  --de-primary-lite: #4dddf6;                  /* 主色 hover 亮色（渐变按钮悬浮用） */
+  --de-primary-2-lite: #7b7df5;                /* 副色 hover 亮色 */                     /* 蓝紫 —— 渐变副色 */
+  --de-primary-strong: #0ea5bd;                /* 主色加深，用于 hover 文字 */
+  --de-primary-soft: rgba(34, 211, 238, 0.12); /* 主色淡底 */
+  --de-primary-line: rgba(34, 211, 238, 0.30); /* 主色描边 */
+  --de-on-primary: #04212b;                    /* 主色之上的文字（深色，保证对比度） */
+  --de-glow: 0 2px 16px rgba(34, 211, 238, 0.32);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* ---------- 表面层级（越靠上层越亮） ---------- */
+  --de-bg: #0b1020;                            /* 应用底色 */
+  --de-surface-1: rgba(255, 255, 255, 0.055);  /* 卡片 */
+  --de-surface-2: rgba(255, 255, 255, 0.035);  /* 次级容器 */
+  --de-surface-solid: #101728;                 /* 需要不透明的地方（弹窗） */
+  --de-sidebar: rgba(255, 255, 255, 0.035);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* ---------- 描边 ---------- */
+  --de-border: rgba(255, 255, 255, 0.10);
+  --de-border-strong: rgba(255, 255, 255, 0.16);
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  /* ---------- 文字 ---------- */
+  --de-text-1: #f2f5fa;   /* 标题 / 主要文字 */
+  --de-text-2: #a7b0c0;   /* 正文 / 次要文字 */
+  --de-text-3: #77808f;   /* 辅助 / 禁用 */
+
+  /* ---------- 语义色 ---------- */
+  --de-success: #34d399;
+  --de-danger: #f87171;
+  --de-warning: #fbbf24;
+
+  /* ---------- 圆角阶 ----------
+     刻度对齐 Element Plus 组件与项目里实际在用的取值，
+     这样组件样式才能无损收敛到 token，而不是被迫取近似值。 */
+  --de-r-xxs: 4px;   /* 标签、徽章等小元素 */
+  --de-r-xs: 6px;    /* 小控件 */
+  --de-r-sm: 8px;    /* 按钮、输入框、列表项 */
+  --de-r-md: 12px;   /* 卡片、面板 */
+  --de-r-lg: 16px;   /* 弹窗、大容器 */
+
+  /* ---------- 阴影 ---------- */
+  --de-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --de-shadow-2: 0 8px 28px rgba(0, 0, 0, 0.32);
+  --de-shadow-3: 0 20px 60px rgba(0, 0, 0, 0.45);
+
+  /* ---------- 间距阶（4 的倍数） ---------- */
+  --de-s1: 4px;  --de-s2: 8px;  --de-s3: 12px; --de-s4: 16px;
+  --de-s5: 20px; --de-s6: 24px; --de-s7: 32px; --de-s8: 40px;
+
+  /* ---------- 字号阶 ----------
+     同样对齐实际用量（12/13/14 是项目里最常用的三档）。 */
+  --de-fs-1: 12px;   /* 辅助信息 */
+  --de-fs-2: 13px;   /* 次要文字 */
+  --de-fs-3: 14px;   /* 正文（基准） */
+  --de-fs-4: 16px;   /* 小标题 */
+  --de-fs-5: 18px;   /* 标题 */
+  --de-fs-6: 20px;   /* 页面主标题 */
+  --de-fs-7: 24px;   /* 特大标题 */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+/* ============================================================
+   2. Element Plus 主题覆盖
+   ------------------------------------------------------------
+   只覆盖「会影响全局观感」的变量，其余交给 Element Plus 的深色主题。
+   ============================================================ */
+html.dark {
+  /* 主色阶：暗色模式下 light-N 是「往背景方向变暗」 */
+  --el-color-primary: #22d3ee;
+  --el-color-primary-light-3: #1e9aad;
+  --el-color-primary-light-5: #1b7481;
+  --el-color-primary-light-7: #184d55;
+  --el-color-primary-light-8: #173a40;
+  --el-color-primary-light-9: #15272a;
+  --el-color-primary-dark-2: #4edcf1;
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+  /* 底色与表面 */
+  --el-bg-color: #101728;
+  --el-bg-color-page: #0b1020;
+  --el-bg-color-overlay: #141c2f;
+
+  /* 文字 */
+  --el-text-color-primary: #f2f5fa;
+  --el-text-color-regular: #c3cad6;
+  --el-text-color-secondary: #8b95a6;
+  --el-text-color-placeholder: #6b7484;
+  --el-text-color-disabled: #5a6272;
+
+  /* 描边 */
+  --el-border-color: rgba(255, 255, 255, 0.14);
+  --el-border-color-light: rgba(255, 255, 255, 0.10);
+  --el-border-color-lighter: rgba(255, 255, 255, 0.08);
+  --el-border-color-extra-light: rgba(255, 255, 255, 0.06);
+
+  /* 填充 */
+  --el-fill-color: rgba(255, 255, 255, 0.07);
+  --el-fill-color-light: rgba(255, 255, 255, 0.05);
+  --el-fill-color-lighter: rgba(255, 255, 255, 0.035);
+  --el-fill-color-extra-light: rgba(255, 255, 255, 0.025);
+
+  /* 遮罩与投影 */
+  --el-mask-color: rgba(6, 10, 20, 0.72);
+  --el-box-shadow: 0 16px 48px rgba(0, 0, 0, 0.50);
+  --el-box-shadow-light: 0 8px 28px rgba(0, 0, 0, 0.36);
+
+  /* 语义色阶：让 success / danger / warning 也落在同一套色系里，
+     light-N 同样是「往深色背景方向混合」 */
+  --el-color-success: #34d399;
+  --el-color-success-light-3: #2a9a71;
+  --el-color-success-light-5: #247457;
+  --el-color-success-light-7: #1e4d3c;
+  --el-color-success-light-9: #172721;
+  --el-color-success-dark-2: #5ddcad;
+
+  --el-color-danger: #f87171;
+  --el-color-danger-light-3: #b45555;
+  --el-color-danger-light-5: #864343;
+  --el-color-danger-light-7: #583030;
+  --el-color-danger-light-9: #2b1d1d;
+  --el-color-danger-dark-2: #f98d8d;
+
+  --el-color-warning: #fbbf24;
+  --el-color-warning-light-3: #b68c1f;
+  --el-color-warning-light-5: #886a1c;
+  --el-color-warning-light-7: #594719;
+  --el-color-warning-light-9: #2b2516;
+  --el-color-warning-dark-2: #fccc50;
+
+  --el-color-info: #8b95a6;
+  --el-color-info-light-3: #6b7484;
+  --el-color-info-light-5: #545c69;
+  --el-color-info-light-7: #3c424c;
+  --el-color-info-light-9: #22262d;
+
+  /* 圆角 */
+  --el-border-radius-base: 9px;
+  --el-border-radius-small: 7px;
+}
+
+/* ============================================================
+   3. 全局基础样式
+   ============================================================ */
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* 全局盒模型：否则「高度 100% + padding」会溢出容器，
+   导致页面底部内容被挤出视口（这次改版踩到的坑） */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 body {
-  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: var(--de-fs-3);
+  line-height: 1.6;
+  color: var(--de-text-2);
+  background: var(--de-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
-}
-
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
-}
-
-/*
- * 应用根容器：Vite 模板原样式限宽 1126px 并 margin:auto 居中，
- * 宽屏下左右大片留白；本项目为全屏左右布局，改为整宽铺满、左对齐。
- */
+/* 应用根容器：整宽铺满 + 品牌光晕背景 */
 #app {
   width: 100%;
   margin: 0;
-  text-align: left;
   min-height: 100vh;
-}
-
-#center {
-  display: flex;
-  flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
-}
-
-#next-steps {
-  display: flex;
-  border-top: 1px solid var(--border);
   text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
+  background:
+    radial-gradient(900px 480px at 6% -12%, rgba(99, 102, 241, 0.30), transparent 62%),
+    radial-gradient(820px 440px at 96% 0%, rgba(34, 211, 238, 0.18), transparent 60%),
+    var(--de-bg);
+  background-attachment: fixed;
 }
 
-#docs {
-  border-right: 1px solid var(--border);
+/* 深色滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: var(--de-r-xxs);
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); }
 
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+/* ============================================================
+   共享类
+   ============================================================ */
+/* 玻璃面板：需要自定义容器时直接用这个类 */
+.de-panel {
+  background: var(--de-surface-1);
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-md);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--de-shadow-2);
 }
 
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
+/* ============================================================
+   Element Plus 组件外观统一
+   ------------------------------------------------------------
+   目的是让「改过的页面」和「还没改的页面」看起来是一套东西。
+   ============================================================ */
 
-  .logo {
-    height: 18px;
-  }
+/* ---------- 卡片：玻璃质感 ---------- */
+.el-card {
+  --el-card-bg-color: var(--de-surface-1);
+  border: 1px solid var(--de-border) !important;
+  border-radius: var(--de-r-md) !important;
+  backdrop-filter: blur(14px);
+  box-shadow: var(--de-shadow-2) !important;
+  overflow: hidden;
+}
+.el-card__header {
+  border-bottom: 1px solid var(--de-border) !important;
+  padding: var(--de-s4) var(--de-s5);
+}
+.el-card__body { padding: var(--de-s5); }
 
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
+/* ---------- 弹窗 ---------- */
+/* 提高弹窗顶部起始位置，并让正文区自行滚动：
+   否则内容多的弹窗（如「设置提取字段」有 10 类预设字段）会超出视口，
+   用户得滚动整个遮罩层才能看到底部按钮。 */
+.el-dialog {
+  --el-dialog-margin-top: 6vh;
+  background: var(--de-surface-solid) !important;
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-md);
+  box-shadow: var(--de-shadow-3);
+}
+.el-dialog__header { border-bottom: 1px solid var(--de-border); margin-right: 0; padding-bottom: var(--de-s4); }
+.el-dialog__title { font-size: var(--de-fs-5); font-weight: 650; color: var(--de-text-1); }
+.el-dialog__body {
+  padding: var(--de-s5);
+  max-height: 62vh;
+  overflow-y: auto;
 }
 
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
+/* ---------- 表格：保证深色下的可读性（这是深色主题最大的风险点） ---------- */
+.el-table {
+  background: transparent !important;
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.05);
+  --el-table-border-color: var(--de-border);
+  --el-table-header-text-color: var(--de-text-1);
+  --el-table-text-color: var(--de-text-2);
+  --el-table-row-hover-bg-color: rgba(34, 211, 238, 0.08);
+}
+.el-table th.el-table__cell {
+  font-weight: 650;
+  font-size: var(--de-fs-2);
+  letter-spacing: 0.3px;
+}
+.el-table td.el-table__cell,
+.el-table th.el-table__cell { border-bottom-color: var(--de-border) !important; }
+.el-table::before, .el-table__inner-wrapper::before { background-color: var(--de-border) !important; }
+
+/* ---------- 其他常用组件 ---------- */
+.el-button { font-weight: 600; }
+/* ---------- 按钮：只有「实心 primary」才用品牌渐变 ----------
+   注意必须排除 is-text / is-link / is-plain，
+   否则文字按钮和朴素按钮会被错误地涂成渐变胶囊。 */
+.el-button--primary:not(.is-text):not(.is-link):not(.is-plain) {
+  background: linear-gradient(135deg, var(--de-primary), var(--de-primary-2));
+  border: none;
+  color: var(--de-on-primary) !important;
+}
+.el-button--primary:not(.is-text):not(.is-link):not(.is-plain):hover,
+.el-button--primary:not(.is-text):not(.is-link):not(.is-plain):focus {
+  background: linear-gradient(135deg, var(--de-primary-lite), var(--de-primary-2-lite));
+  color: var(--de-on-primary) !important;
+}
+.el-button--primary.is-disabled,
+.el-button--primary.is-disabled:hover,
+.el-button--primary.is-disabled:focus {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: transparent !important;
+  color: var(--de-text-3) !important;
 }
 
-.ticks {
-  position: relative;
-  width: 100%;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
-
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
+/* 朴素按钮：透明底 + 语义色描边 */
+.el-button.is-plain {
+  background: transparent !important;
+  box-shadow: none !important;
 }
+.el-button--primary.is-plain {
+  border-color: var(--de-primary-line) !important;
+  color: var(--de-primary) !important;
+}
+.el-button--primary.is-plain:hover {
+  background: var(--de-primary-soft) !important;
+  border-color: var(--de-primary) !important;
+}
+.el-button--danger.is-plain {
+  border-color: rgba(248, 113, 113, 0.35) !important;
+  color: var(--de-danger) !important;
+}
+.el-button--danger.is-plain:hover {
+  background: rgba(248, 113, 113, 0.12) !important;
+  border-color: var(--de-danger) !important;
+}
+
+/* 文字按钮 */
+.el-button.is-text {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.el-button--primary.is-text { color: var(--de-primary) !important; }
+.el-button--primary.is-text:hover {
+  background: var(--de-primary-soft) !important;
+  color: var(--de-primary) !important;
+}
+
+.el-tag {
+  border-radius: var(--de-r-xs);
+  border-color: var(--de-border-strong);
+  background: var(--de-surface-2);
+  color: var(--de-text-2);
+}
+
+.el-input__wrapper,
+.el-textarea__inner {
+  background: var(--de-surface-2) !important;
+  box-shadow: 0 0 0 1px var(--de-border) inset !important;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--de-primary) inset !important;
+}
+
+/* ---------- 空状态：默认那张灰色 3D 插图在深色底上很突兀，压暗缩小 ---------- */
+.el-empty { padding: var(--de-s5) 0; }
+.el-empty__image { width: 68px !important; opacity: 0.3; }
+.el-empty__description { margin-top: var(--de-s2) !important; }
+.el-empty__description p { color: var(--de-text-3); font-size: var(--de-fs-2); }
+
+/* ---------- 顶部提示条：深色玻璃，而不是默认的浅色卡片 ---------- */
+.el-message {
+  background: rgba(20, 28, 47, 0.94) !important;
+  border: 1px solid var(--de-border-strong) !important;
+  border-radius: var(--de-r-sm);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--de-shadow-2);
+  min-width: 280px;
+}
+.el-message .el-message__content { color: var(--de-text-1) !important; }
+.el-message--error { border-color: rgba(248, 113, 113, 0.38) !important; }
+.el-message--success { border-color: rgba(52, 211, 153, 0.38) !important; }
+
+/* ---------- 通知与确认框 ---------- */
+.el-notification,
+.el-message-box {
+  background: var(--de-surface-solid) !important;
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-md);
+  box-shadow: var(--de-shadow-3);
+}
+.el-notification__title,
+.el-message-box__title { color: var(--de-text-1); }
+
+.el-alert { border-radius: var(--de-r-sm); border: 1px solid var(--de-border); }
+.el-loading-mask { backdrop-filter: blur(2px); }
+.el-loading-spinner .el-loading-text { color: var(--de-text-2); }
