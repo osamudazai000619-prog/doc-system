@@ -46,44 +46,70 @@ const activeStep = computed(() => {
 </script>
 
 <style scoped>
-/* scoped：表示这些样式只作用于当前组件，不影响其他组件 */
-
+/* ============================================================
+   步骤条：深色玻璃卡片 + 自定义圆圈
+   ============================================================ */
 .step-bar-card {
-  margin: 18px 24px 0 24px;  /* 上 右 下 左 */
-  border-radius: 12px;
+  margin: var(--de-s4) var(--de-s6) 0;
+  border-radius: var(--de-r-md);
 }
 .step-bar-card :deep(.el-card__body) {
-  padding: 22px 32px 18px;
+  padding: var(--de-s5) var(--de-s7) var(--de-s4);
 }
 
-/* ---------- 放大圆圈序号 ---------- */
+/* ---------- 圆圈序号 ---------- */
 .step-bar-card :deep(.el-step__icon) {
-  width: 38px;
-  height: 38px;
-  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1.5px solid var(--de-border-strong);
+  color: var(--de-text-3);
+  font-size: var(--de-fs-2);
+  transition: all 0.2s;
 }
-.step-bar-card :deep(.el-step__icon.is-text) {
-  font-size: 17px;
-  font-weight: 700;
+.step-bar-card :deep(.el-step__icon.is-text) { font-weight: 700; }
+
+/* 当前步骤：品牌渐变实心 */
+.step-bar-card :deep(.el-step.is-process .el-step__icon) {
+  background: linear-gradient(135deg, var(--de-primary), var(--de-primary-2));
+  border-color: transparent;
+  color: var(--de-on-primary);
+  box-shadow: var(--de-glow);
+}
+/* 已完成步骤：品牌淡底 + 主色描边 */
+.step-bar-card :deep(.el-step.is-finish .el-step__icon) {
+  background: var(--de-primary-soft);
+  border-color: var(--de-primary-line);
+  color: var(--de-primary);
 }
 
-/* ---------- 放大标题与描述 ---------- */
+/* ---------- 标题与描述 ---------- */
 .step-bar-card :deep(.el-step__title) {
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 38px;
+  font-size: var(--de-fs-3);
+  font-weight: 650;
+  line-height: 32px;
+  color: var(--de-text-1);
 }
+.step-bar-card :deep(.el-step__title.is-process) { color: var(--de-primary); }
+.step-bar-card :deep(.el-step__title.is-wait) {
+  color: var(--de-text-3);
+  font-weight: 550;
+}
+.step-bar-card :deep(.el-step__title.is-finish) { color: var(--de-text-1); }
 .step-bar-card :deep(.el-step__description) {
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: var(--de-fs-1);
+  color: var(--de-text-3);
   padding-top: 2px;
 }
 
-/* ---------- 连接线随圆圈加粗 ---------- */
+/* ---------- 连接线 ---------- */
 .step-bar-card :deep(.el-step__line) {
-  top: 19px;
+  top: 16px;
+  background-color: var(--de-border);
 }
-.step-bar-card :deep(.el-step__head) {
-  width: 38px;
+.step-bar-card :deep(.el-step__line-inner) {
+  border-color: var(--de-primary-line);
+  border-width: 1px;
 }
+.step-bar-card :deep(.el-step__head) { width: 32px; }
 </style>

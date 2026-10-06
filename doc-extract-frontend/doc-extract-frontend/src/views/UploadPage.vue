@@ -40,14 +40,15 @@
           @add="onAddTemplate"
           @remove="onRemoveTemplate"
           @clear="onClearTemplate"
-        />
-        <!-- 从文件库选模板 -->
-        <div class="asset-picker-bar">
-          <el-button size="small" text type="primary" @click="openAssetPicker">
-            <el-icon><FolderOpened /></el-icon>
-            <span>从文件库选择模板</span>
-          </el-button>
-        </div>
+        >
+          <!-- 从文件库选模板：属于「模板文件」卡片自己的操作，放进卡片头部 -->
+          <template #header-actions>
+            <el-button size="small" text type="primary" @click="openAssetPicker">
+              <el-icon><FolderOpened /></el-icon>
+              <span>从文件库选择</span>
+            </el-button>
+          </template>
+        </FileUploadCard>
         <!-- 推荐提示条 -->
         <el-alert
           v-if="recommend"
@@ -72,7 +73,7 @@
       <div class="action-bar">
         <div class="action-left">
           <el-button
-            type="success"
+            type="primary"
             :disabled="!canUpload || uploading"
             :loading="uploading"
             @click="handleUpload"
@@ -100,6 +101,7 @@
         <div class="action-right">
           <el-button
             type="primary"
+            plain
             :disabled="!canGoNext || uploading"
             @click="handleNext"
           >
@@ -321,43 +323,119 @@ function acceptRecommend() {
 </script>
 
 <style scoped>
-.upload-page { padding: 16px 24px; display: flex; flex-direction: column; gap: 16px; }
+.upload-page {
+  padding: var(--de-s5) var(--de-s6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--de-s4);
+  min-height: 100%;
+}
 
-.intro-card { border-radius: 8px; }
-.intro-content { display: flex; align-items: flex-start; gap: 12px; }
-.intro-icon { font-size: 24px; color: #409eff; flex-shrink: 0; margin-top: 2px; }
-.intro-title { font-size: 16px; font-weight: 600; color: #303133; margin-bottom: 6px; }
-.intro-desc { font-size: 14px; color: #606266; line-height: 1.6; }
-.intro-desc strong { color: #409eff; }
+/* ---------- 说明卡 ---------- */
+.intro-card { border-radius: var(--de-r-md); }
+.intro-content { display: flex; align-items: flex-start; gap: var(--de-s3); }
+.intro-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  font-size: 19px;
+  border-radius: var(--de-r-sm);
+  color: var(--de-primary);
+  background: var(--de-primary-soft);
+}
+.intro-title {
+  font-size: var(--de-fs-4);
+  font-weight: 650;
+  color: var(--de-text-1);
+  margin-bottom: var(--de-s1);
+}
+.intro-desc { font-size: var(--de-fs-3); color: var(--de-text-2); line-height: 1.7; }
+.intro-desc strong { color: var(--de-primary); font-weight: 650; }
 
-.upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* ---------- 两个上传卡片并排 ---------- */
+.upload-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--de-s4);
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
 @media (max-width: 900px) { .upload-row { grid-template-columns: 1fr; } }
 
-.template-section { display: flex; flex-direction: column; gap: 8px; }
-.asset-picker-bar { display: flex; justify-content: flex-end; }
-.recommend-alert { margin-top: 4px; }
+.template-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--de-s2);
+  min-height: 0;
+}
+.template-section > .upload-card { flex: 1; min-height: 0; }
+.recommend-alert { margin-top: var(--de-s1); }
 
-.action-card { border-radius: 8px; }
-.action-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.action-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.action-right { display: flex; align-items: center; gap: 12px; }
-.hint { font-size: 13px; color: #909399; }
-.hint-info { color: #409eff; }
-.hint-success { color: #67c23a; }
+/* ---------- 操作区 ---------- */
+.action-card { border-radius: var(--de-r-md); }
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--de-s3);
+}
+.action-left { display: flex; align-items: center; gap: var(--de-s3); flex-wrap: wrap; }
+.action-right { display: flex; align-items: center; gap: var(--de-s3); }
 
-.preview-wrapper { display: flex; flex-direction: column; gap: 8px; }
+.hint { font-size: var(--de-fs-2); color: var(--de-text-3); }
+.hint-info { color: var(--de-primary); }
+.hint-success { color: var(--de-success); }
+
+/* ---------- 正文预览 ---------- */
+.preview-wrapper { display: flex; flex-direction: column; gap: var(--de-s2); }
 .preview-header-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 16px; background-color: #ecf5ff; border-radius: 6px; border: 1px solid #d9ecff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--de-s2) var(--de-s4);
+  border-radius: var(--de-r-sm);
+  background: var(--de-primary-soft);
+  border: 1px solid var(--de-primary-line);
 }
-.preview-label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #409eff; }
+.preview-label {
+  display: flex;
+  align-items: center;
+  gap: var(--de-s1);
+  font-size: var(--de-fs-3);
+  font-weight: 650;
+  color: var(--de-primary);
+}
 
-.asset-search { margin-bottom: 12px; }
+/* ---------- 文件库弹窗 ---------- */
+.asset-search { margin-bottom: var(--de-s3); }
 .asset-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px; background: #f5f7fa; border-radius: 6px; margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: var(--de-s2);
+  padding: var(--de-s3);
+  background: var(--de-surface-2);
+  border: 1px solid var(--de-border);
+  border-radius: var(--de-r-sm);
+  margin-bottom: var(--de-s2);
+  transition: border-color 0.15s, background-color 0.15s;
 }
-.asset-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.asset-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #303133; }
-.asset-meta { font-size: 12px; color: #909399; flex-shrink: 0; }
+.asset-row:hover {
+  border-color: var(--de-primary-line);
+  background: var(--de-surface-1);
+}
+.asset-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--de-s2); }
+.asset-info .el-icon { color: var(--de-primary); font-size: 16px; }
+.asset-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--de-fs-2);
+  color: var(--de-text-1);
+}
+.asset-meta { font-size: var(--de-fs-1); color: var(--de-text-3); flex-shrink: 0; }
 </style>
