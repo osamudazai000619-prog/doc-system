@@ -194,7 +194,7 @@ function handleClear() {
   font-weight: 650;
   color: var(--de-text-1);
 }
-.card-title .el-icon { color: var(--de-primary); font-size: 17px; }
+.card-title .el-icon { color: var(--de-primary); font-size: var(--de-fs-5); }
 
 .card-actions {
   display: flex;

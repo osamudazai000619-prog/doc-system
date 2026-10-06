@@ -181,7 +181,7 @@ function handlePreview(row) {
 
 <style scoped>
 .status-card {
-  border-radius: 8px;
+  border-radius: var(--de-r-sm);
 }
 
 .card-header {
@@ -194,7 +194,7 @@ function handlePreview(row) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: var(--de-fs-4);
   font-weight: 600;
   color: var(--de-text-1);
 }
@@ -220,7 +220,7 @@ function handlePreview(row) {
   align-items: center;
   gap: 4px;
   color: var(--de-danger);
-  font-size: 13px;
+  font-size: var(--de-fs-2);
   line-height: 1.4;
 }
 .error-text .el-icon {

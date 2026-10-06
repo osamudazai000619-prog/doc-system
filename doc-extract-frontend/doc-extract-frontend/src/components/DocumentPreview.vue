@@ -114,7 +114,7 @@ function handleVisibleChange(val) {
 /* ==================== 内嵌模式 ==================== */
 .preview-inline {
   border: 1px solid var(--de-border);
-  border-radius: 6px;
+  border-radius: var(--de-r-xs);
   overflow: hidden;
 }
 
@@ -131,19 +131,19 @@ function handleVisibleChange(val) {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 14px;
+  font-size: var(--de-fs-3);
   font-weight: 600;
   color: var(--de-text-1);
 }
 
 .preview-stats {
-  font-size: 12px;
+  font-size: var(--de-fs-1);
   color: var(--de-text-3);
 }
 
 /* ==================== 弹窗模式 ==================== */
 .dialog-stats {
-  font-size: 12px;
+  font-size: var(--de-fs-1);
   color: var(--de-text-3);
   margin-bottom: 8px;
   text-align: right;
@@ -164,7 +164,7 @@ function handleVisibleChange(val) {
 .preview-content pre {
   margin: 0;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 13px;
+  font-size: var(--de-fs-2);
   line-height: 1.7;
   color: var(--de-text-1);
   /* 保留原始换行和空格 */

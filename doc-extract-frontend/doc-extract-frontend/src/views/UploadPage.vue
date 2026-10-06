@@ -340,7 +340,7 @@ function acceptRecommend() {
   width: 38px;
   height: 38px;
   flex: none;
-  font-size: 19px;
+  font-size: var(--de-fs-5);
   border-radius: var(--de-r-sm);
   color: var(--de-primary);
   background: var(--de-primary-soft);
@@ -428,7 +428,7 @@ function acceptRecommend() {
   background: var(--de-surface-1);
 }
 .asset-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--de-s2); }
-.asset-info .el-icon { color: var(--de-primary); font-size: 16px; }
+.asset-info .el-icon { color: var(--de-primary); font-size: var(--de-fs-4); }
 .asset-name {
   flex: 1;
   overflow: hidden;

@@ -279,8 +279,8 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
 }
-.page-title { font-size: 20px; font-weight: 700; color: var(--de-text-1); }
-.page-sub { font-size: 13px; color: var(--de-text-3); margin-top: 4px; }
+.page-title { font-size: var(--de-fs-6); font-weight: 700; color: var(--de-text-1); }
+.page-sub { font-size: var(--de-fs-2); color: var(--de-text-3); margin-top: 4px; }
 
 /* ===== 卡片网格：一行 2 个，卡片偏长方形 ===== */
 .scheme-grid {
@@ -296,7 +296,7 @@ onMounted(load)
   position: relative;
   background: var(--de-surface-1);
   border: 1px solid var(--de-border);
-  border-radius: 12px;
+  border-radius: var(--de-r-md);
   padding: 18px 20px 12px;
   min-height: 210px;
   display: flex;
@@ -314,13 +314,13 @@ onMounted(load)
   position: absolute;
   top: 10px;
   right: 12px;
-  font-size: 18px;
+  font-size: var(--de-fs-5);
   color: var(--de-text-3);
 }
 .card-delete:hover { color: var(--de-danger); }
 
 .card-name {
-  font-size: 16px;
+  font-size: var(--de-fs-4);
   font-weight: 700;
   color: var(--de-text-1);
   padding-right: 28px;
@@ -333,7 +333,7 @@ onMounted(load)
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  font-size: 13px;
+  font-size: var(--de-fs-2);
   color: var(--de-text-2);
 }
 .card-template span {
@@ -349,13 +349,13 @@ onMounted(load)
   align-items: center;
   margin-top: 12px;
 }
-.card-fields-more { font-size: 12px; color: var(--de-text-3); }
-.card-fields-empty { font-size: 12px; color: var(--de-text-3); }
+.card-fields-more { font-size: var(--de-fs-1); color: var(--de-text-3); }
+.card-fields-empty { font-size: var(--de-fs-1); color: var(--de-text-3); }
 
 .card-prompt {
   flex: 1;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--de-fs-1);
   color: var(--de-text-3);
   line-height: 1.6;
   display: -webkit-box;
@@ -372,10 +372,10 @@ onMounted(load)
   border-top: 1px solid var(--de-surface-2);
   padding-top: 6px;
 }
-.card-used { font-size: 11px; color: var(--de-text-3); }
+.card-used { font-size: var(--de-fs-1); color: var(--de-text-3); }
 
 /* ===== 编辑视图 ===== */
-.edit-card { border-radius: 10px; }
+.edit-card { border-radius: var(--de-r-md); }
 .field-editor {
   display: flex;
   flex-wrap: wrap;

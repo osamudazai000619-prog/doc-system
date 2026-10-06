@@ -374,7 +374,7 @@ onMounted(async () => {
   width: 40px;
   height: 40px;
   flex: none;
-  font-size: 21px;
+  font-size: var(--de-fs-6);
   border-radius: var(--de-r-sm);
   color: var(--de-on-primary);
   background: linear-gradient(135deg, var(--de-primary), var(--de-primary-2));
@@ -413,7 +413,7 @@ onMounted(async () => {
   color: var(--de-on-primary);
   box-shadow: 0 3px 22px rgba(34, 211, 238, 0.45);
 }
-.new-task-icon { font-size: 17px; margin-right: var(--de-s1); }
+.new-task-icon { font-size: var(--de-fs-5); margin-right: var(--de-s1); }
 
 /* ---------- 方案管理入口 ---------- */
 .scheme-entry {
@@ -442,11 +442,11 @@ onMounted(async () => {
   background: var(--de-primary-soft);
   color: var(--de-primary);
 }
-.scheme-entry-icon { font-size: 17px; color: var(--de-primary); }
+.scheme-entry-icon { font-size: var(--de-fs-5); color: var(--de-primary); }
 .scheme-entry-name { flex: 1; }
 .scheme-entry-count {
   padding: 0 var(--de-s2);
-  border-radius: 9px;
+  border-radius: var(--de-r-sm);
   background: rgba(255, 255, 255, 0.09);
   color: var(--de-text-3);
   font-size: var(--de-fs-1);
@@ -485,7 +485,7 @@ onMounted(async () => {
 .group-count {
   margin-left: auto;
   padding: 0 var(--de-s2);
-  border-radius: 9px;
+  border-radius: var(--de-r-sm);
   background: rgba(255, 255, 255, 0.09);
   color: var(--de-text-3);
   font-size: var(--de-fs-1);
@@ -524,7 +524,7 @@ onMounted(async () => {
 .side-item.active .item-title { color: var(--de-primary); }
 .side-item.active .item-icon { color: var(--de-primary); }
 
-.item-icon { color: var(--de-text-3); font-size: 16px; flex-shrink: 0; }
+.item-icon { color: var(--de-text-3); font-size: var(--de-fs-4); flex-shrink: 0; }
 .item-text { flex: 1; min-width: 0; }
 .item-title {
   font-size: var(--de-fs-2);
@@ -608,5 +608,5 @@ onMounted(async () => {
   font-size: var(--de-fs-4);
   font-weight: 700;
 }
-.welcome-btn .el-icon { font-size: 18px; margin-right: var(--de-s1); }
+.welcome-btn .el-icon { font-size: var(--de-fs-5); margin-right: var(--de-s1); }
 </style>
