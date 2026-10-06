@@ -88,6 +88,16 @@
               <el-icon><Fold /></el-icon>
               <span>全部折叠</span>
             </el-button>
+            <el-button
+              type="success"
+              size="small"
+              :loading="exportingTrace"
+              :disabled="resultStore.isEmpty"
+              @click="handleExportTrace"
+            >
+              <el-icon><Download /></el-icon>
+              <span>导出溯源报告</span>
+            </el-button>
           </div>
         </div>
       </el-card>
@@ -182,7 +192,7 @@
                         'cell-abnormal-bg': isAbnormal(row[field]) && !isEditing(fileIdx, tableIdx, $index, field),
                         'cell-modified-bg': isModified(fileIdx, tableIdx, $index, field),
                       }"
-                      @dblclick="startEdit(fileIdx, tableIdx, $index, field, row[field])"
+                      @dblclick="startEdit(fileIdx, tableIdx, $index, field, cellValue(row[field]))"
                     >
                       <!-- 编辑态 -->
                       <el-input
@@ -198,10 +208,60 @@
                       <span
                         v-else
                         :class="['cell-text', { 'cell-abnormal': isAbnormal(row[field]) }]"
-                        :title="String(row[field] ?? '')"
+                        :title="cellValue(row[field])"
                       >
-                        {{ row[field] }}
+                        {{ cellValue(row[field]) }}
                       </span>
+                    </div>
+                  </template>
+                </el-table-column>
+
+                <!-- 溯源信息列 -->
+                <el-table-column label="溯源信息" min-width="280" align="left">
+                  <template #default="{ row }">
+                    <div class="trace-cell">
+                      <div
+                        v-for="field in getAllFields(table)"
+                        :key="field"
+                        class="trace-row"
+                      >
+                        <span class="trace-field">{{ field }}</span>
+                        <div class="trace-body">
+                          <!-- 来源段落：悬停显示原文片段（≤100 字） -->
+                          <el-tooltip
+                            v-if="contextText(row[field])"
+                            :content="contextText(row[field])"
+                            placement="top"
+                            :show-after="300"
+                          >
+                            <span
+                              class="trace-source"
+                              :class="{ 'trace-source-empty': !srcOf(row[field]) }"
+                            >{{ sourceText(row[field]) }}</span>
+                          </el-tooltip>
+                          <span
+                            v-else
+                            class="trace-source trace-source-empty"
+                          >{{ sourceText(row[field]) }}</span>
+                          <!-- 置信度进度条（<50% 标红） + 风险标签 -->
+                          <div class="trace-meta">
+                            <el-progress
+                              v-if="confPct(row[field]) !== null"
+                              :percentage="confPct(row[field])"
+                              :stroke-width="6"
+                              :status="confPct(row[field]) < 50 ? 'exception' : ''"
+                            />
+                            <el-tag
+                              v-for="r in riskList(row[field])"
+                              :key="r.key"
+                              size="small"
+                              effect="dark"
+                              :class="['risk-tag', `risk-tag-${r.key}`]"
+                            >{{ r.label }}</el-tag>
+                          </div>
+                        </div>
+                      </div>
+                      <span v-if="getAllFields(table).length === 0" class="trace-empty">—</span>
                     </div>
                   </template>
                 </el-table-column>
@@ -253,13 +313,74 @@
 import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { useResultStore } from '@/stores/resultStore'
+import { useResultStore, cellValue } from '@/stores/resultStore'
+import { exportTraceReport } from '@/api/extract'
 
 // ============================================================
 // 依赖
 // ============================================================
 const router = useRouter()
 const resultStore = useResultStore()
+
+// ============================================================
+// 溯源信息展示辅助（单元格为 {value,source,context,confidence,risk}）
+// ============================================================
+const RISK_LABELS = {
+  not_found: '未找到',
+  low_confidence: '低置信度',
+  conflict: '冲突',
+  no_source: '无来源',
+}
+
+function srcOf(cell) {
+  return (cell && cell.source) || null
+}
+function sourceText(cell) {
+  const s = srcOf(cell)
+  if (!s) return '无来源'
+  const parts = []
+  if (s.para_id != null) parts.push(`段落 #${s.para_id}`)
+  if (s.page != null) parts.push(`第 ${s.page} 页`)
+  if (s.start != null && s.end != null) parts.push(`偏移 ${s.start}-${s.end}`)
+  return parts.length ? parts.join('，') : '无来源'
+}
+function contextText(cell) {
+  const c = (cell && cell.context) || ''
+  if (!c) return ''
+  return c.length > 100 ? c.slice(0, 100) + '…' : c
+}
+function confPct(cell) {
+  const c = cell && cell.confidence
+  return typeof c === 'number' ? Math.round(c * 100) : null
+}
+function riskList(cell) {
+  const r = (cell && cell.risk) || []
+  return r.filter((k) => RISK_LABELS[k]).map((k) => ({ key: k, label: RISK_LABELS[k] }))
+}
+
+// 导出溯源报告
+const exportingTrace = ref(false)
+async function handleExportTrace() {
+  if (exportingTrace.value || resultStore.isEmpty) return
+  exportingTrace.value = true
+  try {
+    const blob = await exportTraceReport(resultStore.results)
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `溯源报告_${Date.now()}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('溯源报告已导出')
+  } catch (err) {
+    console.error('[导出溯源报告失败]', err)
+    ElMessage.error('导出溯源报告失败')
+  } finally {
+    exportingTrace.value = false
+  }
+}
 
 // ============================================================
 // 折叠状态：用 Set 存已展开的文件索引
@@ -315,8 +436,8 @@ function getAllFields(table) {
   return [...set]
 }
 
-function isAbnormal(value) {
-  const s = String(value ?? '')
+function isAbnormal(cell) {
+  const s = cellValue(cell)
   return s === '未找到' || s === 'PARSE_ERROR'
 }
 
@@ -378,7 +499,7 @@ function commitEdit(fileIdx, tableIdx, recordIdx, field) {
     ?.extracted_tables?.[tableIdx]
     ?.records?.[recordIdx]?.[field]
 
-  if (String(oldValue ?? '') === String(newValue)) {
+  if (cellValue(oldValue) === String(newValue)) {
     editingKey.value = null
     return
   }
@@ -477,6 +598,25 @@ function handleNext() {
 .cell-abnormal { color: #f56c6c; font-weight: 600; }
 .cell-abnormal-bg { background-color: #fef0f0; }
 .cell-modified-bg { background-color: #fdf6ec; }
+
+/* ==================== 溯源信息列 ==================== */
+.trace-cell { display: flex; flex-direction: column; gap: 6px; }
+.trace-row { display: flex; flex-direction: column; gap: 3px; padding: 3px 0; border-bottom: 1px dashed #ebeef5; }
+.trace-row:last-child { border-bottom: none; }
+.trace-field { font-size: 12px; font-weight: 600; color: #303133; }
+.trace-body { display: flex; flex-direction: column; gap: 3px; }
+.trace-source { font-size: 12px; color: #409eff; cursor: default; }
+.trace-source-empty { color: #909399; }
+.trace-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.trace-meta .el-progress { flex: 1; min-width: 70px; }
+.trace-empty { color: #c0c4cc; font-size: 12px; }
+
+/* 风险标签配色 */
+.risk-tag { margin-right: 0; }
+.risk-tag-not_found { background-color: #f56c6c !important; border-color: #f56c6c !important; color: #fff !important; }
+.risk-tag-low_confidence { background-color: #e6a23c !important; border-color: #e6a23c !important; color: #fff !important; }
+.risk-tag-conflict { background-color: #c9a227 !important; border-color: #c9a227 !important; color: #fff !important; }
+.risk-tag-no_source { background-color: #409eff !important; border-color: #409eff !important; color: #fff !important; }
 
 /* ==================== 底部操作栏 ==================== */
 .action-bar {

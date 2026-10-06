@@ -7,7 +7,7 @@ from pathlib import Path
 from services.extract_service import extract_info_via_ai
 from services.history_service import record_extraction
 from services.scheme_service import touch_scheme
-from services.upload_service import UPLOAD_META, parse_file
+from services.upload_service import UPLOAD_META, parse_file, parse_file_with_trace
 from models.schemas import ExtractRequest, ExtractResponseItem
 
 router = APIRouter(prefix="/api", tags=["extract"])
@@ -15,9 +15,93 @@ router = APIRouter(prefix="/api", tags=["extract"])
 logger = logging.getLogger(__name__)
 
 
+def _to_str(value: Any) -> str:
+    """把任意值安全地转为 UTF-8 可解码的字符串。
+
+    关键：若上游误把文件二进制（bytes）传进来，绝不能让它直接进入异常消息或
+    响应字段——否则 FastAPI 在 JSON 序列化时会对 bytes 执行 utf-8 解码，触发
+    UnicodeDecodeError（byte 0xb2 ...）导致 500。这里统一用 errors='replace'
+    清洗，保证后续任何拼接/返回都是纯文本。"""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8", errors="replace")
+        except Exception:
+            return "<binary data>"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _sanitize_documents(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """入口清洗：确保每个文档的 filename / content 等都是干净字符串，
+    从源头杜绝二进制流入 LLM 提示词与最终响应。"""
+    cleaned: List[Dict[str, Any]] = []
+    for doc in documents or []:
+        if not isinstance(doc, dict):
+            continue
+        new_doc: Dict[str, Any] = {}
+        for k, v in doc.items():
+            # 仅把这些字段当文本清洗；其余字段原样保留（但仍避免 bytes）
+            if k in ("filename", "content", "file_type", "role"):
+                new_doc[k] = _to_str(v)
+            elif isinstance(v, bytes):
+                new_doc[k] = _to_str(v)
+            else:
+                new_doc[k] = v
+        cleaned.append(new_doc)
+    return cleaned
+
+
+def _build_trace_map(
+    documents: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """为每个文档生成溯源段落：按文件名找到已上传的源文件，用 parse_file_with_trace
+    重新解析。溯源与上传时的纯文本来自同一份文件，保证来源一致、偏移自洽。
+
+    任务4：返回结构为 {文件名: {"chunks": [段落...], "para_ids": {}}}。
+    chunks 是 ParseChunk.to_dict() 列表；para_ids 为预留字段（LLM 返回的段落ID
+    映射，当前按单元格经 ||p:N|| 携带，故此处留空字典占位，保持结构约定）。"""
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for meta in UPLOAD_META.values():
+        if meta.get("original_name"):
+            by_name[meta["original_name"]] = meta  # 后者覆盖 = 取最新
+    trace: Dict[str, Dict[str, Any]] = {}
+    for doc in documents:
+        fn = doc.get("filename")
+        meta = by_name.get(fn)
+        path = meta.get("saved_path") if meta else None
+        if not path:
+            continue
+        try:
+            chunks = parse_file_with_trace(path)
+            trace[fn] = {
+                "chunks": [c.to_dict() for c in chunks],
+                "para_ids": {},
+            }
+        except Exception as e:
+            logger.warning("为文档 %s 生成溯源失败: %s", fn, e)
+    return trace
+
+
 @router.post("/extract", response_model=List[ExtractResponseItem])
 async def extract_info(req: ExtractRequest):
-    results = await extract_info_via_ai(req.prompt, req.fields, req.documents)
+    # 入口清洗：把 filename/content 等强制转为干净字符串，杜绝文件二进制
+    # 流入 LLM 提示词或最终响应（否则 JSON 序列化时会因非 UTF-8 字节崩溃成 500）。
+    documents = _sanitize_documents(req.documents)
+    try:
+        trace = _build_trace_map(documents)
+        results = await extract_info_via_ai(req.prompt, req.fields, documents, trace=trace)
+    except Exception as e:
+        # 只记录「文件名 + 错误类型」等元信息，绝不把文件内容/二进制拼进异常消息，
+        # 保证抛出的 detail 永远是可 JSON 序列化的纯文本。
+        names = [d.get("filename", "<unknown>") for d in documents]
+        err_type = type(e).__name__
+        logger.error("提取失败 files=%s error=%s", names, err_type)
+        # 注意：detail 只用错误类型，不使用 str(e)，避免其内含二进制再次触发解码错误
+        raise HTTPException(
+            status_code=500,
+            detail=f"提取失败({err_type})，涉及文件：{', '.join(names)}",
+        ) from e
 
     # 提取完成即落一条任务历史（配置与结果存快照）；失败只记日志，不影响响应
     template_meta: Optional[Dict[str, Any]] = None
@@ -36,7 +120,7 @@ async def extract_info(req: ExtractRequest):
         for item in results:
             item.task_id = str(task_id)
 
-    # 回写方案使用时间（用于推荐接口的"最近使用"排序）；失败只记日志
+    # 回写方案使用时间（用于推荐接口的「最近使用」排序）；失败只记日志
     if req.scheme_id and str(req.scheme_id).isdigit():
         touch_scheme(int(req.scheme_id))
     return results

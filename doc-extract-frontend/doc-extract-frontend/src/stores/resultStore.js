@@ -10,6 +10,34 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+// ------------------------------------------------------------
+// 单元格统一为 { value, source, context, confidence, risk } 结构。
+// 兼容后端返回的 dict 单元格（带溯源）与旧的纯字符串两种形态。
+// ------------------------------------------------------------
+export function cellValue(cell) {
+  if (cell && typeof cell === 'object') return String(cell.value ?? '')
+  return String(cell ?? '')
+}
+
+export function normalizeCell(cell) {
+  if (cell && typeof cell === 'object') {
+    return {
+      value: cell.value ?? '',
+      source: cell.source ?? null,
+      context: cell.context ?? null,
+      confidence: typeof cell.confidence === 'number' ? cell.confidence : null,
+      risk: Array.isArray(cell.risk) ? cell.risk : [],
+    }
+  }
+  return {
+    value: cell ?? '',
+    source: null,
+    context: null,
+    confidence: null,
+    risk: [],
+  }
+}
+
 export const useResultStore = defineStore('result', () => {
 
   // ============================================================
@@ -118,7 +146,7 @@ export const useResultStore = defineStore('result', () => {
       (file.extracted_tables || []).forEach((table) => {
         (table.records || []).forEach((record) => {
           Object.values(record).forEach((val) => {
-            const s = String(val || '')
+            const s = cellValue(val)
             if (s === '未找到' || s === 'PARSE_ERROR') count++
           })
         })
@@ -130,13 +158,15 @@ export const useResultStore = defineStore('result', () => {
 
 
   function normalizeRecords(raw) {
-    if (Array.isArray(raw)) {
-      return raw.filter((r) => r && typeof r === 'object')
-    }
-    if (raw && typeof raw === 'object') {
-      return [raw]
-    }
-    return []
+    // records 统一为「记录对象数组」，并把每个单元格归一化为带溯源的结构
+    const arr = Array.isArray(raw)
+      ? raw.filter((r) => r && typeof r === 'object')
+      : (raw && typeof raw === 'object') ? [raw] : []
+    return arr.map((rec) => {
+      const out = {}
+      Object.keys(rec).forEach((k) => { out[k] = normalizeCell(rec[k]) })
+      return out
+    })
   }
 
   /**
@@ -154,7 +184,7 @@ export const useResultStore = defineStore('result', () => {
     const splitByKey = {}
     let maxLen = 1
     keys.forEach((k) => {
-      const parts = String(record[k] ?? '')
+      const parts = cellValue(record[k])
         .split(/[；;]/)
         .map((s) => s.trim())
       splitByKey[k] = parts
@@ -163,18 +193,18 @@ export const useResultStore = defineStore('result', () => {
     // 没有任何字段含分号列表，原样返回
     if (maxLen <= 1) return records
 
+    // 拆分后每段克隆原单元格（保留溯源 source/context/confidence/risk），仅替换 value
     const rows = []
     for (let i = 0; i < maxLen; i++) {
       const row = {}
       keys.forEach((k) => {
+        const base = normalizeCell(record[k])
         const parts = splitByKey[k]
-        if (parts.length === 1) {
-          row[k] = parts[0]              // 单值字段广播
-        } else if (i < parts.length) {
-          row[k] = parts[i]
-        } else {
-          row[k] = '未找到'              // 长度不齐的缺失位
-        }
+        let seg
+        if (parts.length === 1) seg = parts[0]          // 单值字段广播
+        else if (i < parts.length) seg = parts[i]
+        else seg = '未找到'                              // 长度不齐的缺失位
+        row[k] = { ...base, value: seg }
       })
       rows.push(row)
     }
@@ -214,7 +244,8 @@ export const useResultStore = defineStore('result', () => {
     const record = (table.records || [])[recordIndex]
     if (!record) return
 
-    record[field] = value
+    // 编辑只改 value，保留原溯源（source/context/confidence/risk）
+    record[field] = { ...normalizeCell(record[field]), value: String(value ?? '') }
     dirty.value = true
   }
 
