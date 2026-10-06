@@ -49,7 +49,41 @@ const activeStep = computed(() => {
 /* scoped：表示这些样式只作用于当前组件，不影响其他组件 */
 
 .step-bar-card {
-  margin: 16px 24px 0 24px;  /* 上 右 下 左 */
-  border-radius: 8px;
+  margin: 18px 24px 0 24px;  /* 上 右 下 左 */
+  border-radius: 12px;
+}
+.step-bar-card :deep(.el-card__body) {
+  padding: 22px 32px 18px;
+}
+
+/* ---------- 放大圆圈序号 ---------- */
+.step-bar-card :deep(.el-step__icon) {
+  width: 38px;
+  height: 38px;
+  font-size: 18px;
+}
+.step-bar-card :deep(.el-step__icon.is-text) {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* ---------- 放大标题与描述 ---------- */
+.step-bar-card :deep(.el-step__title) {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 38px;
+}
+.step-bar-card :deep(.el-step__description) {
+  font-size: 13px;
+  line-height: 1.6;
+  padding-top: 2px;
+}
+
+/* ---------- 连接线随圆圈加粗 ---------- */
+.step-bar-card :deep(.el-step__line) {
+  top: 19px;
+}
+.step-bar-card :deep(.el-step__head) {
+  width: 38px;
 }
 </style>

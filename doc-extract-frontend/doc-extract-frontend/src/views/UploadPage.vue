@@ -1,11 +1,10 @@
 <!-- ============================================================
-     UploadPage.vue —— 上传文档页面（正式版 + 5.2 loading 优化）
+     UploadPage.vue —— 上传文档页面（阶段二：从文件库选模板 + 推荐填充）
      ============================================================ -->
 
 <template>
   <div class="upload-page">
 
-    <!-- 顶部说明卡 -->
     <el-card class="intro-card" shadow="never">
       <div class="intro-content">
         <el-icon class="intro-icon"><InfoFilled /></el-icon>
@@ -32,21 +31,45 @@
         @clear="onClearTarget"
       />
 
-      <FileUploadCard
-        title="模板文件"
-        tip="支持 .docx / .xlsx，可多选"
-        accept=".docx,.xlsx"
-        :files="fileStore.templateFiles"
-        @add="onAddTemplate"
-        @remove="onRemoveTemplate"
-        @clear="onClearTemplate"
-      />
+      <div class="template-section">
+        <FileUploadCard
+          title="模板文件"
+          tip="支持 .docx / .xlsx，可多选"
+          accept=".docx,.xlsx"
+          :files="fileStore.templateFiles"
+          @add="onAddTemplate"
+          @remove="onRemoveTemplate"
+          @clear="onClearTemplate"
+        />
+        <!-- 从文件库选模板 -->
+        <div class="asset-picker-bar">
+          <el-button size="small" text type="primary" @click="openAssetPicker">
+            <el-icon><FolderOpened /></el-icon>
+            <span>从文件库选择模板</span>
+          </el-button>
+        </div>
+        <!-- 推荐提示条 -->
+        <el-alert
+          v-if="recommend"
+          :title="recommendTitle"
+          type="info"
+          :closable="false"
+          show-icon
+          class="recommend-alert"
+        >
+          <template #default>
+            <el-button size="small" type="primary" @click="acceptRecommend">
+              一键填充
+            </el-button>
+            <el-button size="small" text @click="recommend = null">忽略</el-button>
+          </template>
+        </el-alert>
+      </div>
     </div>
 
     <!-- 操作按钮区 -->
     <el-card class="action-card" shadow="never">
       <div class="action-bar">
-
         <div class="action-left">
           <el-button
             type="success"
@@ -68,17 +91,12 @@
             <span>清空所有</span>
           </el-button>
 
-          <span v-if="!canUpload" class="hint">
-            请至少选择一个目标文档
-          </span>
-          <span v-else-if="uploading" class="hint hint-info">
-            模拟上传中，请稍候……
-          </span>
+          <span v-if="!canUpload" class="hint">请至少选择一个目标文档</span>
+          <span v-else-if="uploading" class="hint hint-info">模拟上传中，请稍候……</span>
           <span v-else-if="fileStore.hasUploaded" class="hint hint-success">
             解析完成，共 {{ fileStore.validTargetFiles.length }} 个目标文档可用
           </span>
         </div>
-
         <div class="action-right">
           <el-button
             type="primary"
@@ -89,20 +107,12 @@
             <el-icon><ArrowRight /></el-icon>
           </el-button>
         </div>
-
       </div>
     </el-card>
 
-    <!-- 文件解析状态表格（带 loading 遮罩） -->
-    <div
-      v-if="fileStore.hasUploaded"
-      v-loading="uploading"
-      element-loading-text="正在解析文档..."
-    >
-      <FileStatusTable
-        :files="fileStore.allFiles"
-        @preview="handlePreview"
-      />
+    <!-- 文件解析状态表格 -->
+    <div v-if="fileStore.hasUploaded" v-loading="uploading" element-loading-text="正在解析文档...">
+      <FileStatusTable :files="fileStore.allFiles" @preview="handlePreview" />
     </div>
 
     <!-- 内嵌预览区 -->
@@ -112,22 +122,34 @@
           <el-icon><View /></el-icon>
           <span>正文预览</span>
         </div>
-        <el-button
-          type="primary"
-          text
-          size="small"
-          @click="previewFile = null"
-        >
+        <el-button type="primary" text size="small" @click="previewFile = null">
           <el-icon><Close /></el-icon>
           <span>关闭预览</span>
         </el-button>
       </div>
-      <DocumentPreview
-        mode="inline"
-        :filename="previewFile.filename"
-        :content="previewFile.content"
-      />
+      <DocumentPreview mode="inline" :filename="previewFile.filename" :content="previewFile.content" />
     </div>
+
+    <!-- 文件库选择弹窗 -->
+    <el-dialog v-model="assetPickerVisible" title="从文件库选择模板" width="520px">
+      <el-input
+        v-model="assetKeyword"
+        placeholder="搜索文件名..."
+        size="small"
+        clearable
+        prefix-icon="Search"
+        class="asset-search"
+      />
+      <el-empty v-if="filteredAssets.length === 0" description="暂无可用的模板文件" :image-size="60" />
+      <div v-for="a in filteredAssets" :key="a.id" class="asset-row">
+        <div class="asset-info">
+          <el-icon><Document /></el-icon>
+          <span class="asset-name" :title="a.original_name">{{ a.original_name }}</span>
+          <span class="asset-meta">{{ a.ext }} · {{ formatSize(a.size) }}</span>
+        </div>
+        <el-button size="small" type="primary" @click="selectAsset(a)">选择</el-button>
+      </div>
+    </el-dialog>
 
   </div>
 </template>
@@ -139,88 +161,54 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useFileStore } from '@/stores/fileStore'
+import { useResultStore } from '@/stores/resultStore'
+import { useFieldStore } from '@/stores/fieldStore'
+import { fetchAssets, loadAsset } from '@/api/assets'
+import { fetchRecommendation } from '@/api/schemes'
 import FileUploadCard from '@/components/FileUploadCard.vue'
 import FileStatusTable from '@/components/FileStatusTable.vue'
 import DocumentPreview from '@/components/DocumentPreview.vue'
 
-// ============================================================
-// 依赖初始化
-// ============================================================
 const router = useRouter()
 const fileStore = useFileStore()
+const resultStore = useResultStore()
+const fieldStore = useFieldStore()
 
-// ============================================================
-// 本地状态
-// ============================================================
 const uploading = ref(false)
 const previewFile = ref(null)
 
-// ============================================================
-// 计算属性
-// ============================================================
 const canUpload = computed(() => fileStore.targetFiles.length > 0)
 const canGoNext = computed(() => fileStore.validTargetFiles.length > 0)
 
-// ============================================================
-// 目标文档相关操作
-// ============================================================
-function onAddTarget(files) {
-  fileStore.addFile('target', files)
-}
+// ======== 目标文档 ========
+function onAddTarget(files) { fileStore.addFile('target', files) }
+function onRemoveTarget(filename) { fileStore.removeFile('target', filename) }
+function onClearTarget() { fileStore.targetFiles.splice(0) }
 
-function onRemoveTarget(filename) {
-  fileStore.removeFile('target', filename)
-}
+// ======== 模板文件 ========
+function onAddTemplate(files) { fileStore.addFile('template', files) }
+function onRemoveTemplate(filename) { fileStore.removeFile('template', filename) }
+function onClearTemplate() { fileStore.templateFiles.splice(0) }
 
-function onClearTarget() {
-  fileStore.targetFiles.splice(0)
-}
-
-// ============================================================
-// 模板文件相关操作
-// ============================================================
-function onAddTemplate(files) {
-  fileStore.addFile('template', files)
-}
-
-function onRemoveTemplate(filename) {
-  fileStore.removeFile('template', filename)
-}
-
-function onClearTemplate() {
-  fileStore.templateFiles.splice(0)
-}
-
-// ============================================================
-// 上传并解析（带防重入）
-// ============================================================
+// ======== 上传并解析 ========
 async function handleUpload() {
-  // ★ 防重入：如果正在上传，直接 return
   if (uploading.value) return
-
   uploading.value = true
-
   try {
     const formData = new FormData()
-
-    fileStore.targetFiles.forEach((file) => {
-      formData.append('target_files', file)
-    })
-
-    fileStore.templateFiles.forEach((file) => {
-      formData.append('template_files', file)
-    })
-
+    fileStore.targetFiles.forEach((file) => formData.append('target_files', file))
+    fileStore.templateFiles.forEach((file) => formData.append('template_files', file))
     const data = await request.post('/upload', formData)
     fileStore.setAllFiles(data)
-
+    // 模板上传成功后检查推荐
+    const tmpl = data.find((f) => f.role === 'template' && f.status === 'success')
+    if (tmpl && tmpl.asset_id) {
+      checkRecommend(tmpl.asset_id)
+    }
     const successCount = data.filter((f) => f.status === 'success').length
     const otherCount = data.length - successCount
-
     if (otherCount > 0) {
-      ElMessage.warning(
-        `解析完成：成功 ${successCount} 个，其他 ${otherCount} 个（请查看状态表）`
-      )
+      ElMessage.warning(`解析完成：成功 ${successCount} 个，其他 ${otherCount} 个（请查看状态表）`)
     } else if (successCount > 0) {
       ElMessage.success(`解析完成：全部成功，共 ${successCount} 个`)
     }
@@ -232,31 +220,20 @@ async function handleUpload() {
   }
 }
 
-// ============================================================
-// 清空所有
-// ============================================================
+// ======== 清空 ========
 async function handleClearAll() {
   try {
-    await ElMessageBox.confirm(
-      '确定要清空所有已上传的文件和解析结果吗？',
-      '提示',
-      {
-        type: 'warning',
-        confirmButtonText: '确定清空',
-        cancelButtonText: '取消',
-      }
-    )
+    await ElMessageBox.confirm('确定要清空所有已上传的文件和解析结果吗？', '提示', {
+      type: 'warning', confirmButtonText: '确定清空', cancelButtonText: '取消',
+    })
     fileStore.clearAll()
     previewFile.value = null
+    recommend.value = null
     ElMessage.success('已清空')
-  } catch {
-    // 用户取消，什么都不做
-  }
+  } catch {}
 }
 
-// ============================================================
-// 点击"查看正文"
-// ============================================================
+// ======== 预览 ========
 function handlePreview(file) {
   previewFile.value = file
   setTimeout(() => {
@@ -265,9 +242,7 @@ function handlePreview(file) {
   }, 50)
 }
 
-// ============================================================
-// 下一步
-// ============================================================
+// ======== 下一步 ========
 function handleNext() {
   if (!canGoNext.value) {
     ElMessage.warning('请先上传并解析至少 1 个目标文档')
@@ -275,17 +250,79 @@ function handleNext() {
   }
   router.push('/extract')
 }
+
+// ======== 从文件库选择 ========
+const assetPickerVisible = ref(false)
+const assetKeyword = ref('')
+const assetList = ref([])
+
+function openAssetPicker() {
+  assetPickerVisible.value = true
+  assetKeyword.value = ''
+  fetchAssets('template').then((res) => {
+    assetList.value = res.items || []
+  }).catch(() => {})
+}
+
+const filteredAssets = computed(() => {
+  const kw = assetKeyword.value.trim().toLowerCase()
+  if (!kw) return assetList.value
+  return assetList.value.filter((a) => a.original_name.toLowerCase().includes(kw))
+})
+
+function formatSize(size) {
+  if (!size) return '0 B'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function selectAsset(a) {
+  try {
+    const item = await loadAsset(a.id)
+    fileStore.upsertParsedFile(item)
+    assetPickerVisible.value = false
+    ElMessage.success(`已选择模板「${item.filename}」`)
+    // 检查推荐
+    if (item.asset_id) checkRecommend(item.asset_id)
+  } catch {
+    // 拦截器已提示
+  }
+}
+
+// ======== 推荐 ========
+const recommend = ref(null)
+
+async function checkRecommend(assetId) {
+  try {
+    const res = await fetchRecommendation(assetId)
+    if (res) recommend.value = res
+  } catch {
+    // 静默失败
+  }
+}
+
+const recommendTitle = computed(() => {
+  if (!recommend.value) return ''
+  const date = recommend.value.used_at
+  if (recommend.value.source === 'scheme') {
+    return `该模板有已保存的方案「${recommend.value.scheme_name || ''}」${date ? '（' + date + ' 用过）' : ''}`
+  }
+  return `该模板 ${date ? date : '之前'} 曾使用过，可直接填充上次配置`
+})
+
+function acceptRecommend() {
+  if (!recommend.value) return
+  resultStore.setPrompt(recommend.value.prompt || '')
+  fieldStore.setFields(recommend.value.fields || [])
+  recommend.value = null
+  ElMessage.success('已填充上次使用的提示词和字段')
+}
 </script>
 
 <style scoped>
-.upload-page {
-  padding: 16px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+.upload-page { padding: 16px 24px; display: flex; flex-direction: column; gap: 16px; }
 
-/* ==================== 顶部说明卡 ==================== */
 .intro-card { border-radius: 8px; }
 .intro-content { display: flex; align-items: flex-start; gap: 12px; }
 .intro-icon { font-size: 24px; color: #409eff; flex-shrink: 0; margin-top: 2px; }
@@ -293,32 +330,34 @@ function handleNext() {
 .intro-desc { font-size: 14px; color: #606266; line-height: 1.6; }
 .intro-desc strong { color: #409eff; }
 
-/* ==================== 两个上传卡片并排 ==================== */
-.upload-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-@media (max-width: 900px) {
-  .upload-row { grid-template-columns: 1fr; }
-}
+.upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .upload-row { grid-template-columns: 1fr; } }
 
-/* ==================== 操作按钮区 ==================== */
+.template-section { display: flex; flex-direction: column; gap: 8px; }
+.asset-picker-bar { display: flex; justify-content: flex-end; }
+.recommend-alert { margin-top: 4px; }
+
 .action-card { border-radius: 8px; }
 .action-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .action-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .action-right { display: flex; align-items: center; gap: 12px; }
-
 .hint { font-size: 13px; color: #909399; }
 .hint-info { color: #409eff; }
 .hint-success { color: #67c23a; }
 
-/* ==================== 预览区 ==================== */
 .preview-wrapper { display: flex; flex-direction: column; gap: 8px; }
 .preview-header-bar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 16px; background-color: #ecf5ff;
-  border-radius: 6px; border: 1px solid #d9ecff;
+  padding: 8px 16px; background-color: #ecf5ff; border-radius: 6px; border: 1px solid #d9ecff;
 }
 .preview-label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #409eff; }
+
+.asset-search { margin-bottom: 12px; }
+.asset-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: #f5f7fa; border-radius: 6px; margin-bottom: 8px;
+}
+.asset-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.asset-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #303133; }
+.asset-meta { font-size: 12px; color: #909399; flex-shrink: 0; }
 </style>

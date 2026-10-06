@@ -24,6 +24,40 @@
     </el-card>
 
     <!-- ==================================================
+         选择方案（可选）
+         ================================================== -->
+    <el-card class="section-card" shadow="never">
+      <template #header>
+        <div class="section-header">
+          <div class="section-title">
+            <el-icon><Collection /></el-icon>
+            <span>选择方案</span>
+            <el-tag size="small" type="info" round>可选</el-tag>
+          </div>
+          <el-button size="small" text type="primary" @click="router.push('/schemes')">
+            <el-icon><SetUp /></el-icon>
+            <span>管理方案</span>
+          </el-button>
+        </div>
+      </template>
+      <el-select
+        v-model="selectedSchemeId"
+        placeholder="从已有方案中加载提示词和字段（也可不选，手动填写）"
+        clearable
+        :disabled="resultStore.extracting"
+        style="width: 100%"
+        @change="onSchemeChange"
+      >
+        <el-option
+          v-for="s in schemeOptions"
+          :key="s.id"
+          :label="s.name + (s.template_name ? ' — ' + s.template_name : '')"
+          :value="s.id"
+        />
+      </el-select>
+    </el-card>
+
+    <!-- ==================================================
          字段设置卡（标题左 + 已选字段下）
          ================================================== -->
     <el-card class="section-card" shadow="never">
@@ -175,7 +209,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -183,6 +217,7 @@ import { useFileStore } from '@/stores/fileStore'
 import { useFieldStore } from '@/stores/fieldStore'
 import { useResultStore } from '@/stores/resultStore'
 import FieldSettingDialog from '@/components/FieldSettingDialog.vue'
+import { fetchSchemes } from '@/api/schemes'
 import request from '@/api/request'
 
 // ============================================================
@@ -197,7 +232,33 @@ const resultStore = useResultStore()
 // 本地状态
 // ============================================================
 const dialogVisible = ref(false)
-const prompt = ref('')
+// 提示词初始值取 resultStore 快照：一键填充/草稿恢复时已写入 store
+const prompt = ref(resultStore.prompt || '')
+
+// ============================================================
+// 方案选择
+// ============================================================
+const selectedSchemeId = ref(null)
+const schemeOptions = ref([])
+
+onMounted(async () => {
+  try {
+    const res = await fetchSchemes()
+    schemeOptions.value = res.items || []
+  } catch {
+    // 方案列表加载失败不阻断主流程
+  }
+})
+
+// 选中方案 → 预填充字段与提示词（均可继续修改）
+function onSchemeChange(id) {
+  if (!id) return
+  const scheme = schemeOptions.value.find((s) => s.id === id)
+  if (!scheme) return
+  fieldStore.setFields(scheme.fields || [])
+  prompt.value = scheme.prompt || ''
+  ElMessage.success(`已加载方案「${scheme.name}」，可继续修改`)
+}
 
 // ============================================================
 // 计算属性
@@ -261,6 +322,7 @@ async function handleExtract() {
       filename: d.filename,
       content: d.content,
     })),
+    scheme_id: selectedSchemeId.value ? String(selectedSchemeId.value) : '',
   }
 
   console.log('[发起提取] 参数：', {
@@ -277,6 +339,8 @@ async function handleExtract() {
     resultStore.setResults(data)
     resultStore.setPrompt(payload.prompt)
     resultStore.setFields(payload.fields)
+    // 后端已为本次提取落任务历史，task_id 随响应带回（每条 item 相同）
+    resultStore.setTaskId(data?.[0]?.task_id || '')
 
     ElMessage.success(`提取完成，共 ${resultStore.totalRecords} 条记录`)
 

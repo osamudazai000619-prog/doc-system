@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # ================= 1. Upload 接口 =================
 class UploadResponseItem(BaseModel):
@@ -8,6 +8,7 @@ class UploadResponseItem(BaseModel):
     content: str
     role: str = ""        # 文件角色：target（目标文档）/ template（模板文件）
     error: str = ""       # 解析失败时的报错信息，成功时为空字符串
+    asset_id: Optional[int] = None  # 文件资产库 id（增量字段，None 表示登记失败）
 
 # ================= 2. Extract 接口 =================
 class RecordItem(BaseModel):
@@ -21,6 +22,7 @@ class ExtractedTable(BaseModel):
 class ExtractResponseItem(BaseModel):
     source_file: str
     extracted_tables: List[ExtractedTable]
+    task_id: str = ""   # 本次提取落库的任务历史 id（增量字段，旧前端可忽略）
 
 # ---------- 后端内部模型：阶段一"表计划"，不进对外契约 ----------
 class TablePlanItem(BaseModel):
@@ -37,6 +39,7 @@ class ExtractRequest(BaseModel):
     prompt: str
     fields: List[str] = Field(..., max_length=10)
     documents: List[Dict[str, Any]]
+    scheme_id: str = ""   # 本次提取使用的方案 id（增量字段，用于回写方案使用时间）
 
     @model_validator(mode='after')
     def check_prompt_or_fields(self):
@@ -49,6 +52,7 @@ class ExtractRequest(BaseModel):
 class ExportRequest(BaseModel):
     confirmed_data: List[ExtractResponseItem]
     template_name: str
+    task_id: str = ""   # 关联的提取任务 id（增量字段，用于导出产物与任务挂钩）
 
 class ExportResponse(BaseModel):
     download_url: str

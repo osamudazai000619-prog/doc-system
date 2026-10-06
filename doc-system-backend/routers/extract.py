@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 
 from services.extract_service import extract_info_via_ai
+from services.history_service import record_extraction
+from services.scheme_service import touch_scheme
 from services.upload_service import UPLOAD_META, parse_file
 from models.schemas import ExtractRequest, ExtractResponseItem
 
@@ -15,7 +17,29 @@ logger = logging.getLogger(__name__)
 
 @router.post("/extract", response_model=List[ExtractResponseItem])
 async def extract_info(req: ExtractRequest):
-    return await extract_info_via_ai(req.prompt, req.fields, req.documents)
+    results = await extract_info_via_ai(req.prompt, req.fields, req.documents)
+
+    # 提取完成即落一条任务历史（配置与结果存快照）；失败只记日志，不影响响应
+    template_meta: Optional[Dict[str, Any]] = None
+    for meta in UPLOAD_META.values():
+        if meta.get("role") == "template":
+            template_meta = meta  # 遍历取最后出现的模板记录
+    task_id = record_extraction(
+        prompt=req.prompt,
+        fields=req.fields,
+        results=[item.model_dump() for item in results],
+        source_filenames=[str(d.get("filename", "")) for d in req.documents],
+        template_asset_id=(template_meta or {}).get("asset_id"),
+        template_name=(template_meta or {}).get("original_name", ""),
+    )
+    if task_id is not None:
+        for item in results:
+            item.task_id = str(task_id)
+
+    # 回写方案使用时间（用于推荐接口的"最近使用"排序）；失败只记日志
+    if req.scheme_id and str(req.scheme_id).isdigit():
+        touch_scheme(int(req.scheme_id))
+    return results
 
 
 # ========== 智能提取模板表头接口 ==========

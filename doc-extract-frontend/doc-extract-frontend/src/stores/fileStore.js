@@ -74,6 +74,21 @@ export const useFileStore = defineStore('file', () => {
     })
   }
 
+  /**
+   * 合入单条"从文件库加载"的解析结果：同 role + 同 filename 则替换，否则追加。
+   * 与 setAllFiles 的区别是不动其它已有条目。
+   */
+  function upsertParsedFile(item) {
+    const idx = allFiles.value.findIndex(
+      (f) => f.role === item.role && f.filename === item.filename
+    )
+    if (idx >= 0) {
+      allFiles.value[idx] = item
+    } else {
+      allFiles.value.push(item)
+    }
+  }
+
   function clearAll() {
     targetFiles.value = []
     templateFiles.value = []
@@ -92,6 +107,7 @@ export const useFileStore = defineStore('file', () => {
     addFile,
     removeFile,
     setAllFiles,
+    upsertParsedFile,
     clearAll,
   }
 }, {

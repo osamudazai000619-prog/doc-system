@@ -151,7 +151,23 @@
               <el-icon><Download /></el-icon>
               <span>下载</span>
             </el-button>
+            <el-button type="success" plain @click="saveSchemeVisible = true">
+              <el-icon><Collection /></el-icon>
+              <span>存为方案</span>
+            </el-button>
           </div>
+        </div>
+
+        <!-- 用户自主决定何时开启新任务（不自动跳转） -->
+        <div class="completed-footer">
+          <div class="completed-tip">
+            <el-icon><CircleCheckFilled /></el-icon>
+            <span>文件已生成，可反复预览或下载；确认无误后再开启新任务</span>
+          </div>
+          <el-button type="primary" size="large" @click="handleStartNew">
+            <el-icon><Plus /></el-icon>
+            <span>开启新任务</span>
+          </el-button>
         </div>
       </el-card>
 
@@ -164,6 +180,26 @@
       >
         <pre class="preview-content">{{ previewContent }}</pre>
       </el-dialog>
+
+      <!-- 存为方案弹窗 -->
+      <el-dialog v-model="saveSchemeVisible" title="保存为方案" width="420px">
+        <el-form label-width="80px" label-position="left">
+          <el-form-item label="方案名称" required>
+            <el-input v-model="schemeName" maxlength="50" show-word-limit placeholder="例如：城市经济数据提取" />
+          </el-form-item>
+          <el-form-item label="模板">
+            <span class="scheme-template-name">{{ fileStore.templateParsedFiles[0]?.filename || '（无）' }}</span>
+          </el-form-item>
+          <el-form-item label="字段">
+            <el-tag v-for="f in resultStore.fields" :key="f" size="small" style="margin-right: 4px">{{ f }}</el-tag>
+            <span v-if="!resultStore.fields.length" class="scheme-template-name">（未设置字段）</span>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="saveSchemeVisible = false">取消</el-button>
+          <el-button type="primary" :loading="schemeSaving" @click="handleSaveScheme">保存</el-button>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -174,11 +210,14 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFileStore } from '@/stores/fileStore'
 import { useResultStore } from '@/stores/resultStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { saveScheme } from '@/api/schemes'
 import request from '@/api/request'
 
 const router = useRouter()
 const fileStore = useFileStore()
 const resultStore = useResultStore()
+const ws = useWorkspaceStore()
 
 // 解析模板内容 → 表格分组 [{ name, fields }]
 // 后端两种标记：docx 为「[表格N]」，xlsx 为「[工作表] sheet名」；
@@ -281,11 +320,47 @@ function getStatusInfo(status) {
 }
 
 const isExporting = ref(false)
-const exportResult = ref(null)      // { downloadUrl, filename }
+// 恢复草稿/刷新后，若该任务已生成过文件，直接还原结果卡片
+const exportResult = ref(
+  ws.taskCompleted && ws.completedExport?.downloadUrl
+    ? {
+        downloadUrl: ws.completedExport.downloadUrl,
+        filename: ws.completedExport.filename || '提取结果文件',
+      }
+    : null
+)
 const previewVisible = ref(false)
 const previewLoading = ref(false)
 const previewContent = ref('')
 const previewFilename = ref('')
+
+// ======== 存为方案 ========
+const saveSchemeVisible = ref(false)
+const schemeName = ref('')
+const schemeSaving = ref(false)
+
+async function handleSaveScheme() {
+  if (!schemeName.value.trim()) {
+    ElMessage.warning('请填写方案名称')
+    return
+  }
+  schemeSaving.value = true
+  try {
+    await saveScheme({
+      name: schemeName.value.trim(),
+      prompt: resultStore.prompt || '',
+      fields: resultStore.fields || [],
+      template_asset_id: fileStore.templateParsedFiles[0]?.asset_id || null,
+    })
+    ElMessage.success('方案已保存，下次可在提取页直接选用')
+    saveSchemeVisible.value = false
+    schemeName.value = ''
+  } catch {
+    // 拦截器已提示（如重名 400）
+  } finally {
+    schemeSaving.value = false
+  }
+}
 
 // 预览生成文件本身：从 download_url 提取 file_id，调 /preview 接口
 async function handlePreview() {
@@ -335,6 +410,7 @@ async function handleExport() {
     confirmed_data: confirmedData,
     template_name: fileStore.templateParsedFiles[0].filename,
     mapping: mapping.value,
+    task_id: resultStore.taskId || '',
   }
 
   console.log('[发起导出] 参数：', payload)
@@ -345,11 +421,15 @@ async function handleExport() {
     const downloadUrl = res.download_url
 
     if (downloadUrl) {
-      exportResult.value = {
-        downloadUrl,
-        filename: res.message?.replace(/^生成成功：/, '') || '提取结果文件',
-      }
+      const filename =
+        res.message?.replace(/^生成成功：/, '') || '提取结果文件'
+      exportResult.value = { downloadUrl, filename }
       ElMessage.success('生成成功，可预览或下载')
+      // 不归档、不自动跳转：
+      // 标记任务完成，把产物信息写入草稿快照（刷新可恢复），
+      // 并刷新侧边栏历史；草稿归档推迟到用户主动开启新任务时
+      ws.setTaskCompleted({ filename, downloadUrl })
+      await Promise.all([ws.persistCurrent(), ws.loadHistory()])
     } else {
       ElMessage.error('后端未返回下载链接')
     }
@@ -379,6 +459,15 @@ function triggerDownload(url, filename) {
 
 function goUpload() { router.push('/upload') }
 function goResult() { router.push('/result') }
+
+// 用户主动开启新任务：createNewTask 会先归档当前已完成草稿
+async function handleStartNew() {
+  const target = await ws.createNewTask()
+  if (target) {
+    router.push(target)
+    ElMessage.success('已开启新任务')
+  }
+}
 </script>
 
 <style scoped>
@@ -411,6 +500,7 @@ function goResult() { router.push('/result') }
   white-space: pre-wrap;
   word-break: break-all;
 }
+.scheme-template-name { font-size: 13px; color: #606266; }
 .export-page {
   padding: 16px 24px;
   display: flex;
@@ -456,4 +546,18 @@ function goResult() { router.push('/result') }
 .mapping-arrow { color: #c0c4cc; flex-shrink: 0; }
 .mapping-select { flex: 1; }
 .action-bar { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; }
+
+/* ---------- 完成提示 + 开启新任务 ---------- */
+.completed-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed #dcdfe6;
+}
+.completed-tip {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14px; color: #67c23a; font-weight: 600;
+}
+.completed-tip .el-icon { font-size: 17px; }
 </style>

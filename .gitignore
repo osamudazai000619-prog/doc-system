@@ -29,3 +29,6 @@ Thumbs.db
 # Uploads
 doc-system-backend/uploads/
 
+# Runtime data (SQLite)
+doc-system-backend/data/
+
