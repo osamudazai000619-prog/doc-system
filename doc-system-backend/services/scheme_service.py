@@ -6,16 +6,24 @@
 """
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import func
+
 from db.database import SessionLocal
-from db.models import Asset, Scheme
+from db.models import Asset, Scheme, Task
 
 logger = logging.getLogger(__name__)
 
 
-def _scheme_to_dict(s: Scheme, template: Optional[Asset] = None) -> Dict[str, Any]:
+def _scheme_to_dict(
+    s: Scheme,
+    template: Optional[Asset] = None,
+    use_count: int = 0,
+    healthy: bool = True,
+) -> Dict[str, Any]:
     return {
         "id": s.id,
         "name": s.name,
@@ -23,29 +31,67 @@ def _scheme_to_dict(s: Scheme, template: Optional[Asset] = None) -> Dict[str, An
         "template_name": (template.original_name if template else ""),
         "prompt": s.prompt or "",
         "fields": json.loads(s.fields_json or "[]"),
+        # 该方案被任务引用的次数（由 tasks.scheme_id 快照推导，非表字段）
+        "use_count": use_count,
+        # 绑定的模板资产记录及磁盘文件是否仍存在；未绑定模板视为健康
+        "healthy": healthy,
         "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
         "updated_at": s.updated_at.strftime("%Y-%m-%d %H:%M:%S") if s.updated_at else "",
         "last_used_at": s.last_used_at.strftime("%Y-%m-%d %H:%M:%S") if s.last_used_at else "",
     }
 
 
+def _asset_healthy(asset: Optional[Asset]) -> bool:
+    """模板资产是否可用：记录存在且磁盘文件未被清理脚本回收。"""
+    if asset is None:
+        return False
+    return bool(asset.path) and os.path.exists(asset.path)
+
+
 def list_schemes() -> List[Dict[str, Any]]:
-    """方案列表（按最后使用时间倒序，其次按更新时间）。"""
+    """方案列表（按使用次数倒序，其次最后使用时间、更新时间）。
+
+    使用次数由 tasks.scheme_id 快照 GROUP BY 推导，不在 schemes 表加列——
+    SQLAlchemy create_all 不会给已存在的表补列，加列在老库上恒为 NULL。
+    同时批量检查绑定模板的磁盘健康状态（healthy）。
+    """
     with SessionLocal() as session:
-        schemes = (
-            session.query(Scheme)
-            .order_by(
-                Scheme.last_used_at.desc().nullslast(),
-                Scheme.updated_at.desc(),
-            )
+        schemes = session.query(Scheme).all()
+
+        count_rows = (
+            session.query(Task.scheme_id, func.count(Task.id))
+            .filter(Task.scheme_id.isnot(None))
+            .group_by(Task.scheme_id)
             .all()
         )
+        use_counts = {sid: cnt for sid, cnt in count_rows}
+
         asset_ids = {s.template_asset_id for s in schemes if s.template_asset_id}
-        assets = {}
+        assets: Dict[int, Asset] = {}
         if asset_ids:
             for a in session.query(Asset).filter(Asset.id.in_(asset_ids)).all():
                 assets[a.id] = a
-        return [_scheme_to_dict(s, assets.get(s.template_asset_id)) for s in schemes]
+
+        def sort_key(s: Scheme):
+            lu = s.last_used_at
+            uu = s.updated_at or s.created_at or datetime.min
+            # 使用次数优先；同次数时用过的（last_used_at 非空）排前面，再按时间倒序
+            return (-use_counts.get(s.id, 0), lu is None,
+                    -(lu.timestamp() if lu else 0.0), -uu.timestamp())
+
+        schemes.sort(key=sort_key)
+        return [
+            _scheme_to_dict(
+                s,
+                assets.get(s.template_asset_id),
+                use_count=use_counts.get(s.id, 0),
+                healthy=(
+                    _asset_healthy(assets.get(s.template_asset_id))
+                    if s.template_asset_id else True
+                ),
+            )
+            for s in schemes
+        ]
 
 
 def get_scheme(scheme_id: int) -> Optional[Dict[str, Any]]:
@@ -54,7 +100,14 @@ def get_scheme(scheme_id: int) -> Optional[Dict[str, Any]]:
         if s is None:
             return None
         template = session.get(Asset, s.template_asset_id) if s.template_asset_id else None
-        return _scheme_to_dict(s, template)
+        use_count = (
+            session.query(func.count(Task.id))
+            .filter(Task.scheme_id == scheme_id)
+            .scalar()
+            or 0
+        )
+        healthy = _asset_healthy(template) if s.template_asset_id else True
+        return _scheme_to_dict(s, template, use_count=use_count, healthy=healthy)
 
 
 def save_scheme(

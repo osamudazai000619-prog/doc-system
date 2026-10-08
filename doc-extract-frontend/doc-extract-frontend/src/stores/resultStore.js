@@ -11,9 +11,10 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 // ------------------------------------------------------------
-// 单元格统一为 { value, source, context, segments, risk } 结构。
-// segments：多段拼接值逐段的溯源信息 [{value, source, context}, ...]，
-// 供拆行后按行展示各自来源。兼容后端返回的 dict 单元格与旧的纯字符串两种形态。
+// 单元格统一为 { value, source, context, risk } 结构。
+// 后端返回的 segments（逐段溯源）仅在拆行时用于回填各行来源，拆行后即剥离：
+// 若随每行保留，2542 行 × 2542 段的引用会被 deep watch / JSON.stringify
+// 放大成千万级对象遍历，直接卡死页面。兼容 dict 单元格与旧纯字符串两种形态。
 // ------------------------------------------------------------
 export function cellValue(cell) {
   if (cell && typeof cell === 'object') return String(cell.value ?? '')
@@ -181,11 +182,27 @@ export const useResultStore = defineStore('result', () => {
    * 字段值数量不一致时按最大长度拆，缺失位补"未找到"；
    * 只有一个分号字段而其余为单值时，单值广播到每一行。
    */
+  function stripSegments(recs) {
+    return recs.map((rec) => {
+      const out = {}
+      Object.keys(rec).forEach((k) => {
+        const c = rec[k] || {}
+        out[k] = {
+          value: c.value ?? '',
+          source: c.source ?? null,
+          context: c.context ?? null,
+          risk: Array.isArray(c.risk) ? c.risk : [],
+        }
+      })
+      return out
+    })
+  }
+
   function splitSemicolonRecords(records) {
-    if (records.length !== 1) return records
+    if (records.length !== 1) return stripSegments(records)
     const record = records[0]
     const keys = Object.keys(record)
-    if (keys.length === 0) return records
+    if (keys.length === 0) return stripSegments(records)
 
     const splitByKey = {}
     let maxLen = 1
@@ -196,8 +213,8 @@ export const useResultStore = defineStore('result', () => {
       splitByKey[k] = parts
       if (parts.length > maxLen) maxLen = parts.length
     })
-    // 没有任何字段含分号列表，原样返回
-    if (maxLen <= 1) return records
+    // 没有任何字段含分号列表，原样返回（仍剥离 segments）
+    if (maxLen <= 1) return stripSegments(records)
 
     // 拆分后每段克隆原单元格并替换 value；若后端提供了逐段溯源 segments，
     // 第 i 行取 segments[i] 的 source/context，避免所有行共用首段来源造成错指
@@ -213,10 +230,10 @@ export const useResultStore = defineStore('result', () => {
         else seg = '未找到'                              // 长度不齐的缺失位
         const segTrace = Array.isArray(base.segments) ? base.segments[i] : null
         row[k] = {
-          ...base,
           value: seg,
           source: segTrace ? (segTrace.source ?? null) : base.source,
           context: segTrace ? (segTrace.context ?? null) : base.context,
+          risk: Array.isArray(base.risk) ? base.risk : [],
         }
       })
       rows.push(row)
@@ -257,8 +274,14 @@ export const useResultStore = defineStore('result', () => {
     const record = (table.records || [])[recordIndex]
     if (!record) return
 
-    // 编辑只改 value，保留原溯源（source/context/segments/risk）
-    record[field] = { ...normalizeCell(record[field]), value: String(value ?? '') }
+    // 编辑只改 value，保留原溯源（source/context/risk），不带回 segments
+    const prev = normalizeCell(record[field])
+    record[field] = {
+      value: String(value ?? ''),
+      source: prev.source,
+      context: prev.context,
+      risk: prev.risk,
+    }
     dirty.value = true
   }
 

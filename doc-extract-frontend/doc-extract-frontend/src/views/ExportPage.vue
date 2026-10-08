@@ -394,6 +394,8 @@ const previewFilename = ref('')
 const saveSchemeVisible = ref(false)
 const schemeName = ref('')
 const schemeSaving = ref(false)
+// 本次页面停留期间是否已自动提示过存方案（重复生成不重复弹）
+const saveSchemeAutoPrompted = ref(false)
 
 async function handleSaveScheme() {
   if (!schemeName.value.trim()) {
@@ -408,7 +410,7 @@ async function handleSaveScheme() {
       fields: resultStore.fields || [],
       template_asset_id: fileStore.templateParsedFiles[0]?.asset_id || null,
     })
-    ElMessage.success('方案已保存，下次可在提取页直接选用')
+    ElMessage.success('方案已保存，下次可在上传页直接选用')
     saveSchemeVisible.value = false
     schemeName.value = ''
   } catch {
@@ -489,6 +491,16 @@ async function handleExport() {
       // 并刷新侧边栏历史；草稿归档推迟到用户主动开启新任务时
       ws.setTaskCompleted({ filename, downloadUrl })
       await Promise.all([ws.persistCurrent(), ws.loadHistory()])
+
+      // 自动沉淀：首次导出成功、且本次配置不是来自已存方案时，
+      // 主动提示存为方案并预填模板名，用户可直接取消（不影响主流程）
+      if (!saveSchemeAutoPrompted.value && !resultStore.schemeId) {
+        saveSchemeAutoPrompted.value = true
+        const base = (fileStore.templateParsedFiles[0]?.filename || '')
+          .replace(/\.[^.]+$/, '')
+        schemeName.value = base
+        saveSchemeVisible.value = true
+      }
     } else {
       ElMessage.error('后端未返回下载链接')
     }

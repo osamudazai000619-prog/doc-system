@@ -5,7 +5,8 @@
 - 提取完成 → record_extraction：tasks 落一条快照（status=extracted）
 - 导出成功 → record_export：exports 落产物记录，tasks.status 更新为 exported
 读取：
-- 历史列表/详情走 tasks + exports 联查
+- 历史列表/详情走 tasks + exports 联查，且仅含 status=exported 的任务
+  （仅提取未导出、未走完流程的任务不进历史）
 - /api/download/{file_id} 内存 miss 时经 find_export_by_file_id 回源，
   保证后端重启后历史产物仍可重复下载
 """
@@ -155,13 +156,17 @@ def _task_to_list_item(task: Task, export: Optional[ExportRecord]) -> Dict[str, 
 
 
 def list_tasks(page: int = 1, size: int = 20) -> Dict[str, Any]:
-    """历史任务列表（按时间倒序，分页）。每条附带最近一次导出产物信息。"""
+    """历史任务列表（按时间倒序，分页）。每条附带最近一次导出产物信息。
+
+    仅返回走完流程（status=exported）的任务；仅提取未导出的任务不进历史。
+    """
     page = max(page, 1)
     size = min(max(size, 1), 100)
     with SessionLocal() as session:
-        total = session.query(Task).count()
+        base_q = session.query(Task).filter(Task.status == "exported")
+        total = base_q.count()
         tasks = (
-            session.query(Task)
+            base_q
             .order_by(Task.created_at.desc(), Task.id.desc())
             .offset((page - 1) * size)
             .limit(size)
@@ -187,10 +192,13 @@ def list_tasks(page: int = 1, size: int = 20) -> Dict[str, Any]:
 
 
 def get_task_detail(task_id: int) -> Optional[Dict[str, Any]]:
-    """任务详情：配置快照 + 结果快照 + 全部导出产物。"""
+    """任务详情：配置快照 + 结果快照 + 全部导出产物。
+
+    仅对走完流程（status=exported）的任务可见，未导出的任务按不存在处理（404）。
+    """
     with SessionLocal() as session:
         task = session.get(Task, task_id)
-        if task is None:
+        if task is None or task.status != "exported":
             return None
         exports = (
             session.query(ExportRecord)

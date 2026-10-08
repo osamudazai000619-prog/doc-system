@@ -5,6 +5,17 @@ print("--- 1. dotenv 导入成功 ---")
 load_dotenv()
 print("--- 2. 环境变量加载成功 ---")
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler("backend.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+
 from fastapi import FastAPI
 print("--- 3. FastAPI 导入成功 ---")
 from fastapi.middleware.cors import CORSMiddleware

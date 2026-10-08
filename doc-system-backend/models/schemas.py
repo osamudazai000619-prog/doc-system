@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from typing import List, Dict, Any, Optional
 
 # ================= 1. Upload 接口 =================
@@ -39,9 +39,17 @@ class TablePlan(BaseModel):
 
 class ExtractRequest(BaseModel):
     prompt: str
-    fields: List[str] = Field(..., max_length=10)
+    fields: List[str]
     documents: List[Dict[str, Any]]
     scheme_id: str = ""   # 本次提取使用的方案 id（增量字段，用于回写方案使用时间）
+
+    @field_validator('fields')
+    @classmethod
+    def check_fields_limit(cls, v):
+        # 赛题要求：单次任务字段数量不超过 10 个
+        if len(v) > 10:
+            raise ValueError('单次任务设置的字段数量不能超过 10 个')
+        return v
 
     @model_validator(mode='after')
     def check_prompt_or_fields(self):

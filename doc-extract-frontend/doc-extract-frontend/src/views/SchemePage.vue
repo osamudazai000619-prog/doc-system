@@ -37,6 +37,9 @@
           <div class="card-template">
             <el-icon><Document /></el-icon>
             <span :title="s.template_name">{{ s.template_name || '（未绑定模板）' }}</span>
+            <el-tag v-if="s.healthy === false" size="small" type="danger" effect="plain">
+              模板已失效
+            </el-tag>
           </div>
 
           <div class="card-fields">
@@ -61,7 +64,10 @@
               <el-icon><Edit /></el-icon>
               <span>点击编辑</span>
             </el-button>
-            <span v-if="s.last_used_at" class="card-used">最近使用 {{ s.last_used_at }}</span>
+            <div class="card-meta">
+              <span v-if="s.use_count" class="card-used">已使用 {{ s.use_count }} 次</span>
+              <span v-if="s.last_used_at" class="card-used">最近使用 {{ s.last_used_at }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -372,7 +378,14 @@ onMounted(load)
   border-top: 1px solid var(--de-surface-2);
   padding-top: 6px;
 }
-.card-used { font-size: var(--de-fs-1); color: var(--de-text-3); }
+.card-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+.card-used { font-size: var(--de-fs-1); color: var(--de-text-3); white-space: nowrap; }
 
 /* ===== 编辑视图 ===== */
 .edit-card { border-radius: var(--de-r-md); }

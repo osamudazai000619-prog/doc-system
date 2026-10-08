@@ -122,8 +122,8 @@
             </span>
           </div>
         </template>
-        <div v-show="riskSummaryOpen">
-          <el-table :data="riskSummary" size="small" border stripe>
+        <div v-if="riskSummaryOpen">
+          <el-table :data="riskVisible" size="small" border stripe>
             <el-table-column label="文件" prop="file" min-width="180" show-overflow-tooltip />
             <el-table-column label="表" prop="table" min-width="100" show-overflow-tooltip />
             <el-table-column label="行号" prop="rowNo" width="70" align="center" />
@@ -142,6 +142,11 @@
               </template>
             </el-table-column>
           </el-table>
+          <div v-if="riskLimit < riskSummary.length" class="load-more">
+            <el-button size="small" @click="riskLimit += PAGE_SIZE">
+              加载更多（剩余 {{ riskSummary.length - riskLimit }} 条）
+            </el-button>
+          </div>
         </div>
       </el-card>
 
@@ -181,8 +186,8 @@
           </div>
         </template>
 
-        <!-- 折叠内容 -->
-        <div v-show="isExpanded(fileIdx)">
+        <!-- 折叠内容（v-if 懒渲染：折叠时不建 DOM） -->
+        <div v-if="isExpanded(fileIdx)">
           <div class="table-list">
             <div
               v-for="(table, tableIdx) in file.extracted_tables"
@@ -203,13 +208,13 @@
               <!-- 表格 -->
               <el-table
                 v-if="table.records && table.records.length > 0"
-                :data="table.records"
+                :data="visibleRecords(fileIdx, tableIdx, table.records)"
                 stripe
                 border
                 size="small"
                 style="width: 100%"
                 :header-cell-style="{ background: 'var(--de-surface-2)', color: 'var(--de-text-1)', fontWeight: 600 }"
-                :cell-class-name="() => 'editable-cell'"
+                :cell-class-name="editableCellClassName"
               >
                 <!-- 序号列 -->
                 <el-table-column
@@ -220,13 +225,15 @@
                 />
 
                 <!-- 动态字段列 -->
+                <!-- 不使用 show-overflow-tooltip：它会为每个单元格挂 ElTooltip
+                     并同步测量溢出，大表时导致主线程长时间阻塞（页面无响应）。
+                     悬浮提示改用 span 上的原生 :title，零额外组件开销。 -->
                 <el-table-column
                   v-for="field in getAllFields(table)"
                   :key="field"
                   :label="field"
                   :prop="field"
                   min-width="120"
-                  show-overflow-tooltip
                 >
                   <template #default="{ row, $index }">
                     <div
@@ -323,6 +330,18 @@
                 description="该表无记录"
                 :image-size="60"
               />
+
+              <!-- 大表分页：点"加载更多"递增渲染行数 -->
+              <div
+                v-if="table.records.length > tableLimit(fileIdx, tableIdx)"
+                class="load-more"
+              >
+                <el-button size="small" @click="loadMoreRows(fileIdx, tableIdx)">
+                  加载更多（剩余
+                  {{ table.records.length - tableLimit(fileIdx, tableIdx) }}
+                  条）
+                </el-button>
+              </div>
             </div>
 
             <!-- 文件下没有表 -->
@@ -412,15 +431,23 @@ const RISK_LEVEL = {
   no_source: 'mid',
 }
 
+// 行风险按行对象缓存：编辑只改 value 不动 risk，新提取会换 row 对象使缓存自然失效
+const rowRiskCache = new WeakMap()
 function rowRiskLevel(row, fields) {
+  const cached = rowRiskCache.get(row)
+  if (cached !== undefined) return cached
   let level = null
   for (const f of fields) {
     for (const k of ((row && row[f] && row[f].risk) || [])) {
       const lv = RISK_LEVEL[k]
-      if (lv === 'high') return 'high'
+      if (lv === 'high') {
+        rowRiskCache.set(row, 'high')
+        return 'high'
+      }
       if (lv === 'mid') level = 'mid'
     }
   }
+  rowRiskCache.set(row, level)
   return level
 }
 
@@ -449,7 +476,33 @@ const riskSummary = computed(() => {
 })
 const highCount = computed(() => riskSummary.value.filter((i) => i.level === 'high').length)
 const midCount = computed(() => riskSummary.value.filter((i) => i.level === 'mid').length)
-const riskSummaryOpen = ref(true)
+// 默认折叠：进入页面不渲染汇总长表，需要时点开
+const riskSummaryOpen = ref(false)
+
+// ============================================================
+// 分页：大表首屏只渲染前 PAGE_SIZE 行，"加载更多"递增
+// ============================================================
+const PAGE_SIZE = 50
+
+// 汇总表分页
+const riskLimit = ref(PAGE_SIZE)
+const riskVisible = computed(() => riskSummary.value.slice(0, riskLimit.value))
+
+// 明细表分页：按 "文件idx-表idx" 记录各自已展开行数
+const tableLimits = ref({})
+function tableLimit(fileIdx, tableIdx) {
+  return tableLimits.value[`${fileIdx}-${tableIdx}`] || PAGE_SIZE
+}
+function visibleRecords(fileIdx, tableIdx, records) {
+  return (records || []).slice(0, tableLimit(fileIdx, tableIdx))
+}
+function loadMoreRows(fileIdx, tableIdx) {
+  const key = `${fileIdx}-${tableIdx}`
+  tableLimits.value = {
+    ...tableLimits.value,
+    [key]: tableLimit(fileIdx, tableIdx) + PAGE_SIZE,
+  }
+}
 
 // 导出溯源报告
 const exportingTrace = ref(false)
@@ -521,12 +574,24 @@ const modifiedCount = computed(() => modifiedKeys.value.size)
 // ============================================================
 // 工具函数
 // ============================================================
+// el-table 单元格 class：用稳定函数引用，避免每次渲染新建箭头函数
+// 导致 el-table 内部重复计算单元格样式
+function editableCellClassName() {
+  return 'editable-cell'
+}
+
+// 字段名按表对象缓存：避免在每行模板中重复全表扫描（O(n²) → 每表一次）
+const fieldsCache = new WeakMap()
 function getAllFields(table) {
+  const cached = fieldsCache.get(table)
+  if (cached) return cached
   const set = new Set()
   ;(table.records || []).forEach((record) => {
     Object.keys(record).forEach((k) => set.add(k))
   })
-  return [...set]
+  const fields = [...set]
+  fieldsCache.set(table, fields)
+  return fields
 }
 
 function isAbnormal(cell) {
@@ -700,6 +765,13 @@ function handleNext() {
   font-size: var(--de-fs-3); font-weight: 600; color: var(--de-text-1);
 }
 .risk-fields-text { font-size: 12px; color: var(--de-text-2); }
+
+/* ==================== 分页"加载更多" ==================== */
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 2px;
+}
 
 /* ==================== 详情展开溯源（横版表格） ==================== */
 .trace-detail { padding: 10px 12px; display: flex; flex-direction: column; gap: 0; }

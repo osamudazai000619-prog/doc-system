@@ -78,7 +78,10 @@ def _build_table(category: str, records: Dict[str, Any]) -> ExtractedTable:
 
 
 # LLM 在字段值后追加的段落ID分隔符，如 "北京||p:3||"；多段 "a||p:1||;b||p:2||"
-_PARA_DELIM = re.compile(r"\|\|\s*p(?:ara_id)?\s*:\s*(\d+)\s*\|\|", re.IGNORECASE)
+# 尾部 || 设为可选（0~2 个竖线）：模型常输出 "630||p:3899"（无尾）或
+# "81846||p:4246|"（单竖线）等不规范格式，必须兼容，否则 para_id 提取失败、
+# 标记残留进值里导致子串匹配也失败，整列被误标 no_source。
+_PARA_DELIM = re.compile(r"\|\|\s*p(?:ara_id)?\s*:\s*(\d+)\s*\|{0,2}", re.IGNORECASE)
 
 
 def _extract_para_ids(text: str) -> Tuple[List[str], str]:
@@ -620,6 +623,9 @@ def filter_content_by_date(content: str, start_date: str, end_date: str) -> str:
 CHUNK_ROWS = int(os.getenv("EXTRACT_CHUNK_ROWS", os.getenv("EXTRACT_MAX_DATA_ROWS", "100")))
 CHUNK_CONCURRENCY = int(os.getenv("EXTRACT_CHUNK_CONCURRENCY", "8"))
 MAX_CONTENT_LENGTH = int(os.getenv("EXTRACT_MAX_CONTENT_LENGTH", "60000"))
+# 散文结构感知分块：每块字符预算（默认 30000，为输出与前置上下文留余量）。
+# 小于该预算的散文仍整篇单块，行为与旧逻辑完全一致。
+PROSE_CHUNK_CHARS = int(os.getenv("EXTRACT_PROSE_CHUNK_CHARS", "30000"))
 # 块结果对位率：用源块中与字段同名的列（如"国家/地区"）逐行校验模型输出，
 # 低于阈值判定模型漏行/串行，自动沿国家边界劈半重取（最多两级）。
 # 0.995：186 行的块错 1 行（99.46%）即触发修复
@@ -671,14 +677,51 @@ def prune_columns(content: str, fields: List[str]) -> str:
     return "\n".join(out)
 
 
+def _split_prose_chunks(content: str) -> List[Dict[str, Any]]:
+    """散文结构感知分块：以段落为原子单位贪心装块，单段超限才硬切。
+    第 2 块起携带上一块末段的前 500 字符作为 prev_tail（提示词中标注为仅供
+    理解跨段指代、禁止从中提取），避免"该国/上述"等指代断裂，且不引入
+    重叠导致的重复提取。全文在预算内时返回单块，行为等同旧逻辑。"""
+    paragraphs = [p for p in content.split("\n") if p.strip()]
+    if not paragraphs:
+        return [{"kind": "prose", "text": content, "n_rows": None}]
+    packed: List[List[str]] = []
+    batch: List[str] = []
+    used = 0
+    for para in paragraphs:
+        add_len = len(para) + 1
+        if add_len > PROSE_CHUNK_CHARS:
+            # 单段超过预算：先落盘已装内容，再对该段按预算硬切
+            if batch:
+                packed.append(batch)
+                batch, used = [], 0
+            for i in range(0, len(para), PROSE_CHUNK_CHARS):
+                packed.append([para[i:i + PROSE_CHUNK_CHARS]])
+            continue
+        if batch and used + add_len > PROSE_CHUNK_CHARS:
+            packed.append(batch)
+            batch, used = [], 0
+        batch.append(para)
+        used += add_len
+    if batch:
+        packed.append(batch)
+    result: List[Dict[str, Any]] = []
+    for idx, paras in enumerate(packed):
+        item: Dict[str, Any] = {"kind": "prose", "text": "\n".join(paras), "n_rows": None}
+        if idx > 0:
+            item["prev_tail"] = packed[idx - 1][-1][-500:]
+        result.append(item)
+    return result
+
+
 def split_into_chunks(content: str) -> List[Dict[str, Any]]:
     """
     把解析后的文档切成 LLM 请求块。
     - 结构化文本（含 " | " 表格行，兼容多 sheet）：按 [工作表] 标记分节，
       每节首个表格行识别为表头，数据行按 行数+字符数 双约束贪心切批；
       每块自带节标记与表头，模型可独立定位列。块的 n_rows=数据行数（>=1）。
-    - 散文文本（docx 叙述文等，全文无表格行）：整体一块，n_rows=None，
-      不做段数归一化（散文提取出的条目数本就不固定）。
+    - 散文文本（docx 叙述文等，全文无表格行）：按段落结构感知分块（见
+      _split_prose_chunks），n_rows=None，不做段数归一化（散文提取出的条目数本就不固定）。
     """
     lines = content.split("\n")
 
@@ -713,7 +756,7 @@ def split_into_chunks(content: str) -> List[Dict[str, Any]]:
         for _, sec_header, sec_rows in sections
     )
     if not has_tabular:
-        return [{"kind": "prose", "text": content, "n_rows": None}]
+        return _split_prose_chunks(content)
 
     # 2. 每节内先按"首列值连续段(run)"分组（如同一国家的连续多行不被切断），
     #    再在 行数 + 字符数 双约束下贪心装块。块沿语义边界切开能显著降低
@@ -1232,13 +1275,19 @@ def _wrap_llm_tables(tables: List[ExtractedTable]) -> List[ExtractedTable]:
 async def _run_prose_chunk(
     chunk: Dict[str, Any], base_human: str, source_file: str, fields: List[str]
 ) -> List[ExtractedTable]:
-    """散文文档：单块请求，沿用旧的"忽略计划再试一次"兜底；最终失败给 PARSE_ERROR。"""
+    """散文文档：单块请求，沿用旧的"忽略计划再试一次"兜底；最终失败给 PARSE_ERROR。
+    多块模式下携带 prev_tail 前置上下文（仅供理解跨段指代，禁止从中提取）。"""
     text = chunk.get("_annotated_text") or chunk["text"]
     if len(text) > MAX_CONTENT_LENGTH:
         logging.warning("文件 %s 散文内容过长(%d字符)，截断至%d字符",
                         source_file, len(text), MAX_CONTENT_LENGTH)
         text = text[:MAX_CONTENT_LENGTH]
-    human = f"{base_human}文档内容：\n{text}"
+    prev_tail = chunk.get("prev_tail")
+    ctx = ""
+    if prev_tail:
+        ctx = (f"【前文参考】仅供理解本段中的跨段指代（如“该国”“上述”），"
+               f"严禁从【前文参考】中提取任何数据：\n{prev_tail}\n\n")
+    human = f"{base_human}{ctx}文档内容：\n{text}"
 
     try:
         result: Optional[_TableList] = await _ainvoke_extract([
@@ -1338,20 +1387,47 @@ async def extract_info_via_ai(
         # 为喂给 LLM 的文本标注段落ID（行首 ¶N）：LLM 据此在返回值里追加 ||p:N||，
         # 实现精确溯源。仅写入提示词用文本（_annotated_text / _line_pids），
         # chunk["rows"]/["preamble"] 保持干净，不影响 " | " 行列解析。
-        for ch in chunks:
-            if ch.get("kind") == "prose":
-                lines = ch.get("text", "").split("\n")
-                pids = _assign_pids(lines, doc_trace)
-                ch["_annotated_text"] = "\n".join(
-                    (f"¶{p} {ln}" if p is not None else ln) for ln, p in zip(lines, pids)
+        prose_chunks = [c for c in chunks if c.get("kind") == "prose"]
+        if prose_chunks:
+            # 多散文块时把各行合并后统一分配段落ID：顺序消费游标跨块连续，
+            # 避免逐块分配时游标重置导致重复表述错位；单块与旧逻辑一致。
+            all_lines: List[str] = []
+            spans: List[int] = []
+            for c in prose_chunks:
+                ls = c.get("text", "").split("\n")
+                spans.append(len(ls))
+                all_lines.extend(ls)
+            all_pids = _assign_pids(all_lines, doc_trace)
+            pos = 0
+            for c, n in zip(prose_chunks, spans):
+                ls = c.get("text", "").split("\n")
+                c["_annotated_text"] = "\n".join(
+                    (f"¶{p} {ln}" if p is not None else ln)
+                    for ln, p in zip(ls, all_pids[pos:pos + n])
                 )
-            else:
+                pos += n
+        else:
+            for ch in chunks:
                 lines = list(ch.get("preamble", [])) + list(ch.get("rows", []))
                 ch["_line_pids"] = _assign_pids(lines, doc_trace)
 
-        if len(chunks) == 1 and chunks[0]["kind"] == "prose":
-            # 散文文档：条目数不固定，单块提取不做段数约束
-            extracted_tables = await _run_prose_chunk(chunks[0], base_human, source_file, fields)
+        if chunks and all(c.get("kind") == "prose" for c in chunks):
+            # 散文文档：条目数不固定，不做段数约束；多块并发提取后按块序合并
+            if len(chunks) == 1:
+                extracted_tables = await _run_prose_chunk(chunks[0], base_human, source_file, fields)
+            else:
+                logging.info(
+                    "文件 %s 散文结构感知分块 %d 块，并发=%d",
+                    source_file, len(chunks), CHUNK_CONCURRENCY,
+                )
+                sem = asyncio.Semaphore(CHUNK_CONCURRENCY)
+
+                async def _prose_task(ch: Dict[str, Any]):
+                    async with sem:
+                        return await _run_prose_chunk(ch, base_human, source_file, fields)
+
+                per_chunk = await asyncio.gather(*[_prose_task(c) for c in chunks])
+                extracted_tables = _merge_chunk_tables(per_chunk, fields)
         else:
             total = len(chunks)
             total_rows = sum(c["n_rows"] for c in chunks)

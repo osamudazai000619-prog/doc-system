@@ -62,8 +62,9 @@ export const useFileStore = defineStore('file', () => {
   function setAllFiles(files) {
     const targetNames = new Set(targetFiles.value.map((f) => f.name))
     const templateNames = new Set(templateFiles.value.map((f) => f.name))
+    const newNames = new Set(files.map((f) => f.filename))
 
-    allFiles.value = files.map((item) => {
+    const newItems = files.map((item) => {
       // 后端已直接返回 role（target/template），优先使用
       if (item.role) return item
       // 兜底：旧数据或 role 缺失时，按文件名在本地两个列表中反查
@@ -72,6 +73,14 @@ export const useFileStore = defineStore('file', () => {
       else if (templateNames.has(item.filename)) role = 'template'
       return { ...item, role }
     })
+
+    // 保留已有的模板解析结果（特别是通过方案加载的模板，它不在
+    // templateFiles 原始文件列表中，否则 setAllFiles 完全替换会将其刷掉）
+    const keptTemplates = allFiles.value.filter(
+      (item) => item.role === 'template' && !newNames.has(item.filename)
+    )
+
+    allFiles.value = [...keptTemplates, ...newItems]
   }
 
   /**

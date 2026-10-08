@@ -31,10 +31,23 @@
             <span>选择方案</span>
             <el-tag size="small" type="info" round>可选</el-tag>
           </div>
-          <el-button size="small" text type="primary" @click="router.push('/schemes')">
-            <el-icon><SetUp /></el-icon>
-            <span>管理方案</span>
-          </el-button>
+          <div class="scheme-actions">
+            <el-button
+              v-if="hasHistory"
+              size="small"
+              text
+              type="primary"
+              :loading="redoLoading"
+              @click="redoLastTask"
+            >
+              <el-icon><RefreshLeft /></el-icon>
+              <span>重做上次任务</span>
+            </el-button>
+            <el-button size="small" text type="primary" @click="router.push('/schemes')">
+              <el-icon><SetUp /></el-icon>
+              <span>管理方案</span>
+            </el-button>
+          </div>
         </div>
       </template>
       <el-select
@@ -50,7 +63,12 @@
           :key="s.id"
           :label="s.name + (s.template_name ? ' — ' + s.template_name : '')"
           :value="s.id"
-        />
+        >
+          <span class="scheme-option-name">
+            {{ s.name }}{{ s.template_name ? ' — ' + s.template_name : '' }}
+          </span>
+          <span v-if="s.healthy === false" class="scheme-option-bad">模板已失效</span>
+        </el-option>
       </el-select>
     </el-card>
 
@@ -202,6 +220,7 @@ import { useResultStore } from '@/stores/resultStore'
 import { useFieldStore } from '@/stores/fieldStore'
 import { fetchAssets, loadAsset } from '@/api/assets'
 import { fetchSchemes, fetchRecommendation } from '@/api/schemes'
+import { fetchHistoryList, fetchHistoryDetail } from '@/api/history'
 import FileUploadCard from '@/components/FileUploadCard.vue'
 import FileStatusTable from '@/components/FileStatusTable.vue'
 import DocumentPreview from '@/components/DocumentPreview.vue'
@@ -222,17 +241,76 @@ const selectedSchemeId = ref(resultStore.schemeId || null)
 const schemeOptions = ref([])
 const schemesLoading = ref(false)
 
+// ======== 重做上次任务（从最近一条已完成历史还原配置，不带入旧文档） ========
+const hasHistory = ref(false)
+const redoLoading = ref(false)
+
 onMounted(async () => {
   schemesLoading.value = true
   try {
-    const res = await fetchSchemes()
-    schemeOptions.value = res.items || []
+    const [schemeRes] = await Promise.all([
+      fetchSchemes(),
+      fetchHistoryList(1, 1).then((res) => {
+        hasHistory.value = (res.total || 0) > 0
+      }).catch(() => {}),
+    ])
+    schemeOptions.value = schemeRes.items || []
   } catch {
     // 方案列表加载失败不阻断上传主流程
   } finally {
     schemesLoading.value = false
   }
 })
+
+async function redoLastTask() {
+  if (redoLoading.value) return
+  redoLoading.value = true
+  try {
+    const listRes = await fetchHistoryList(1, 1)
+    const last = (listRes.items || [])[0]
+    if (!last) {
+      hasHistory.value = false
+      ElMessage.info('还没有已完成的历史任务')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        `将载入上次任务「${last.title || last.template_name || '未命名'}」的模板、字段与提示词，`
+        + '当前未上传的配置会被替换（旧文档不会带入）。',
+        '重做上次任务',
+        { type: 'info', confirmButtonText: '载入配置', cancelButtonText: '取消' },
+      )
+    } catch {
+      return  // 用户取消
+    }
+
+    const detail = await fetchHistoryDetail(last.id)
+    // 清空工作区（含目标文档原始 File），再按历史快照还原配置
+    fileStore.clearAll()
+    resultStore.clearAll()
+    fieldStore.setFields(detail.fields || [])
+    resultStore.setFields(detail.fields || [])
+    resultStore.setPrompt(detail.prompt || '')
+    resultStore.setSchemeId(null)
+    selectedSchemeId.value = null
+    recommend.value = null
+    if (detail.template_asset_id) {
+      try {
+        const item = await loadAsset(detail.template_asset_id)
+        fileStore.upsertParsedFile(item)
+      } catch {
+        // 模板资产可能已被清理：字段/提示词仍可用，提示用户重传模板
+        ElMessage.warning('上次的模板文件已不存在，字段与提示词已载入，请重新上传模板')
+      }
+    }
+    previewFile.value = null
+    ElMessage.success('已还原上次任务配置，请上传新的目标文档')
+  } catch {
+    // 拦截器已统一提示
+  } finally {
+    redoLoading.value = false
+  }
+}
 
 // 选中方案 → 一键填入：模板文件（从文件库拉取解析结果）+ 提取字段 + 提示词；
 // 字段与提示词写入 store，二阶段页面进入时直接带出，可继续修改
@@ -433,6 +511,9 @@ function acceptRecommend() {
 .scheme-card { border-radius: var(--de-r-md); }
 .scheme-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .scheme-title { display: flex; align-items: center; gap: 8px; font-size: var(--de-fs-4); font-weight: 600; color: var(--de-text-1); }
+.scheme-actions { display: flex; align-items: center; gap: 4px; }
+.scheme-option-name { float: left; }
+.scheme-option-bad { float: right; color: var(--de-danger); font-size: var(--de-fs-1); }
 
 /* ---------- 两个上传卡片并排 ---------- */
 .upload-row {
