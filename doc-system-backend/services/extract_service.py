@@ -714,6 +714,40 @@ def _split_prose_chunks(content: str) -> List[Dict[str, Any]]:
     return result
 
 
+def _pick_sort_key_col(rows: List[str], headers: List[str]) -> Optional[int]:
+    """为结构化表格选择最佳排序列下标：游程压缩率（runs/总行数）最小的列。
+    排除全唯一（ratio>=0.5）、全恒定（runs<2）或空值率过高的列；无合格列返回 None。
+    排序目的：让相同分组键的行聚拢成连续段，使 _chunk_constant_columns 能识别
+    分组列为常量列，由代码直填而非模型输出，减少模型输出量与错位风险。"""
+    if not rows or not headers:
+        return None
+    n = len(rows)
+    if n < 2:
+        return None
+    best_idx: Optional[int] = None
+    best_ratio = 1.0
+    for i in range(len(headers)):
+        vals: List[str] = []
+        empty = 0
+        for r in rows:
+            cells = r.split(" | ")
+            v = cells[i].strip() if i < len(cells) else ""
+            vals.append(v)
+            if not v:
+                empty += 1
+        if empty / n > 0.5:
+            continue
+        runs = 1
+        for j in range(1, n):
+            if vals[j] != vals[j - 1]:
+                runs += 1
+        ratio = runs / n
+        if runs >= 2 and ratio < 0.5 and ratio < best_ratio:
+            best_ratio = ratio
+            best_idx = i
+    return best_idx
+
+
 def split_into_chunks(content: str) -> List[Dict[str, Any]]:
     """
     把解析后的文档切成 LLM 请求块。
@@ -758,15 +792,27 @@ def split_into_chunks(content: str) -> List[Dict[str, Any]]:
     if not has_tabular:
         return _split_prose_chunks(content)
 
-    # 2. 每节内先按"首列值连续段(run)"分组（如同一国家的连续多行不被切断），
-    #    再在 行数 + 字符数 双约束下贪心装块。块沿语义边界切开能显著降低
-    #    模型漏行/串行后按位置对齐时的错位风险。
+    # 2. 每节内先按"排序列稳定排序"聚拢相同分组键的行，再按"首列值连续段(run)"分组，
+    #    最后在 行数 + 字符数 双约束下贪心装块。排序使 _chunk_constant_columns 能识别
+    #    分组列为常量列（如城市），由代码直填而非模型输出，减少模型输出量与错位风险。
     chunks: List[Dict[str, Any]] = []
     max_data_rows = max(CHUNK_ROWS - 1, 1)
     for sec_preamble, sec_header, sec_rows in sections:
         rows = [r for r in sec_rows if " | " in r]
         base = sec_preamble + ([sec_header] if sec_header else [])
         overhead = len("\n".join(base)) + 1
+
+        # 排序：选最佳分组列做稳定排序，让相同分组键的行聚拢成连续段
+        sort_col: Optional[int] = None
+        if sec_header:
+            headers = [h.strip() for h in sec_header.split(" | ")]
+            sort_col = _pick_sort_key_col(rows, headers)
+        if sort_col is not None:
+            rows = sorted(rows, key=lambda r: r.split(" | ")[sort_col].strip())
+            logging.info(
+                "分块前按排序列 col=%d(%s) 稳定排序，共%d行",
+                sort_col, headers[sort_col] if sec_header else "?", len(rows),
+            )
 
         runs: List[List[str]] = []
         run: List[str] = []
@@ -784,7 +830,8 @@ def split_into_chunks(content: str) -> List[Dict[str, Any]]:
         def flush(batch_rows: List[str]) -> None:
             if batch_rows:
                 chunks.append({"kind": "table", "preamble": base,
-                               "rows": batch_rows, "n_rows": len(batch_rows)})
+                               "rows": batch_rows, "n_rows": len(batch_rows),
+                               "_sort_col": sort_col})
 
         batch: List[str] = []
         used = overhead
@@ -1155,10 +1202,13 @@ def _validate_chunk(
 
 
 def _split_chunk_at_run(chunk: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """把块劈成两半，切点尽量落在首列值变化处（国家边界），避免切开同一序列。"""
+    """把块劈成两半，切点尽量落在排序列值变化处（分组边界），避免切开同一序列。
+    无排序列时回退首列。"""
     rows = chunk["rows"]
     n = len(rows)
-    keys = [r.split(" | ", 1)[0].strip() for r in rows]
+    sort_col = chunk.get("_sort_col")
+    key_idx = sort_col if sort_col is not None else 0
+    keys = [r.split(" | ")[key_idx].strip() if key_idx < len(r.split(" | ")) else "" for r in rows]
     cut = n // 2
     for d in range(n // 2):
         found: Optional[int] = None
