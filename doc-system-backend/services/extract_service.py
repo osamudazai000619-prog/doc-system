@@ -331,6 +331,35 @@ def _chain_for(kind: str, idx: int, thinking: Optional[bool] = None) -> Any:
     return _plan_chain[key] if kind == "plan" else _extract_chain[key]
 
 
+class FatalExtractError(RuntimeError):
+    """系统级不可重试错误（鉴权失败/额度耗尽/模型不存在等）。
+    一旦抛出必须立即中断整批提取，禁止降级占位伪装成内容问题。"""
+
+
+def _is_fatal_auth_error(e: Exception) -> bool:
+    """判断是否为不可重试的系统级错误：HTTP 401/403/404，
+    或消息含鉴权失败/额度耗尽/模型不存在等关键字。
+    与限流（429 / rate limit）严格区分——限流可切换模型重试，这类错误重试无意义。"""
+    code = getattr(e, "status_code", None)
+    if code in (401, 403, 404):
+        return True
+    msg = str(e).lower()
+    return any(
+        k in msg
+        for k in (
+            "insufficient_quota",
+            "quota exhausted",
+            "invalid api key",
+            "invalid_api_key",
+            "incorrect api key",
+            "unauthorized",
+            "authentication",
+            "model not found",
+            "does not exist",
+        )
+    )
+
+
 def _is_quota_error(e: Exception) -> bool:
     """判断是否为'额度不足/配额'类错误——这类错误才触发模型切换。
     命中：HTTP 403，或消息中含 insufficient_quota / AllocationQuota / quota / 限流 等关键字。"""
@@ -396,7 +425,9 @@ async def _ainvoke_with_fallback(kind: str, messages: List[Any]) -> Any:
     """按降级链顺序调用 LLM：
     - 单模型内：遇 enable_thinking 相关 400 先翻转重试一次（见 _try_model）；
     - 模型间：额度不足 或 翻转后仍 400 → 切换到下一模型（重建实例）重试；
-    - 其它错误直接抛出；全部模型都失败时，抛出最后一次的原始错误。"""
+    - 其它错误直接抛出；全部模型都失败时，抛出最后一次的原始错误；
+    - 若最终错误属于鉴权/额度类不可重试错误，包装为 FatalExtractError，
+      供上层立即中断整批，避免剩余块继续发起注定失败的请求。"""
     global _model_index
     models = _resolve_model_names()
     n = len(models)
@@ -420,8 +451,16 @@ async def _ainvoke_with_fallback(kind: str, messages: List[Any]) -> Any:
                 i += 1
                 _model_index = i
                 continue
+            if _is_fatal_auth_error(e):
+                raise FatalExtractError(
+                    f"LLM 系统级错误（不可重试）: {type(e).__name__}"
+                ) from e
             raise
     if last_err is not None:
+        if _is_fatal_auth_error(last_err):
+            raise FatalExtractError(
+                f"LLM 降级链全部模型均失败（不可重试）: {type(last_err).__name__}"
+            ) from last_err
         raise last_err
     raise RuntimeError("模型降级链为空，无可用模型")
 
@@ -526,6 +565,9 @@ async def _build_table_plan(prompt: str) -> Tuple[List[TablePlanItem], str]:
         if plan is None or not plan.plans:
             raise ValueError("阶段一模型未返回有效计划")
         return plan.plans, target_headers
+    except FatalExtractError:
+        # 鉴权/额度类系统级错误：不得降级伪装，必须中断整批并明确上报
+        raise
     except Exception as e:
         logging.exception("阶段一计划生成失败，降级为默认分类: %s", e)
         return fallback, target_headers
@@ -628,8 +670,9 @@ MAX_CONTENT_LENGTH = int(os.getenv("EXTRACT_MAX_CONTENT_LENGTH", "60000"))
 PROSE_CHUNK_CHARS = int(os.getenv("EXTRACT_PROSE_CHUNK_CHARS", "30000"))
 # 块结果对位率：用源块中与字段同名的列（如"国家/地区"）逐行校验模型输出，
 # 低于阈值判定模型漏行/串行，自动沿国家边界劈半重取（最多两级）。
-# 0.995：186 行的块错 1 行（99.46%）即触发修复
-CHUNK_MIN_SCORE = float(os.getenv("EXTRACT_CHUNK_MIN_SCORE", "0.995"))
+# 0.85：小块（约29行）下每行约占3.4%，阈值过高会把96.5%这类高分块也反复劈半；
+# 允许个别行级偏差而不触发修复（可用 EXTRACT_CHUNK_MIN_SCORE 覆盖）
+CHUNK_MIN_SCORE = float(os.getenv("EXTRACT_CHUNK_MIN_SCORE", "0.85"))
 REPAIR_MAX_DEPTH = 2
 REPAIR_MIN_ROWS = 20
 
@@ -1100,6 +1143,8 @@ async def _invoke_chunk(
                     raise ValueError("模型未返回有效的结构化数据")
                 return True, result.tables
             except Exception as e:
+                if isinstance(e, FatalExtractError):
+                    raise
                 is_timeout = "Timeout" in type(e).__name__
                 if is_timeout and attempt == 1:
                     logging.warning(
@@ -1147,6 +1192,11 @@ def _chunk_check_columns(
 
 def _cells_match(src: str, got: str, is_numeric: bool) -> bool:
     s, g = src.strip(), got.strip()
+    # 空值语义对齐：源表用横杠/空白/“无”表示缺测，模型按提示词输出“未找到”，
+    # 两者应视为等价，否则首要污染物/污染类型等常空列会整列判不匹配、把整块对位率拖到 0
+    empty_synonyms = {"", "-", "—", "–", "－", "未找到", "无", "none", "null", "/"}
+    if s.lower() in empty_synonyms and g.lower() in empty_synonyms:
+        return True
     if is_numeric:
         ms = re.match(r"^-?\d+(?:\.\d+)?", s.replace(",", ""))
         mg = re.match(r"^-?\d+(?:\.\d+)?", g.replace(",", ""))
@@ -1162,8 +1212,12 @@ def _validate_chunk(
     chunk: Dict[str, Any], tables: List[ExtractedTable],
     checks: List[Tuple[str, int, bool]]
 ) -> float:
-    """对位率 [0,1]：各校验列逐行命中率的最小值（最弱列决定是否修复）。
-    某字段段数与块行数不一致直接判 0；无校验列时返回 1.0（无法机器校验）。
+    """对位率 [0,1]：各校验列逐行命中率的平均值（列级独立计分，避免单列问题连坐整块）。
+    某字段段数与块行数不一致仅该列记 0；无校验列时返回 1.0（无法机器校验）。
+    owner 选择：模型按计划可能输出多张表（如三城市各一张），而块内往往只含
+    其中一个城市的数据，其余表的字段全为“未找到”占位。必须优先选取该字段
+    存在真实取值的表做比对，否则拿占位值对真实值会把对位率误判为 0，
+    触发无效的劈半重试风暴。全部为占位时兜底取第一张含该字段的表。
     副作用：对命中不全（low_confidence）或段内取值冲突（conflict）的字段，
     在其 records 结构上原地补打 risk 标记。"""
     if not checks or not tables:
@@ -1176,16 +1230,31 @@ def _validate_chunk(
         for r in chunk["rows"]:
             cells = r.split(" | ")
             expected.append(cells[col].strip() if col < len(cells) else "")
-        # 找到含该字段的首条模型表记录（值可能是 ExtractResult/dict/str）
-        owner = next((t for t in tables if field in t.records), None)
+        # 找含该字段的模型表记录（值可能是 ExtractResult/dict/str）：
+        # 优先取该字段有真实（非占位）值的表；全为占位则兜底取第一张含该字段的表
+        owner: Optional[ExtractedTable] = None
+        first_with_field: Optional[ExtractedTable] = None
+        for t in tables:
+            if field not in t.records:
+                continue
+            if first_with_field is None:
+                first_with_field = t
+            segs = [x.strip() for x in re.split(r"[;；]", _str_value(t.records.get(field)))]
+            if any(s not in _EMPTY_VALUES for s in segs):
+                owner = t
+                break
+        if owner is None:
+            owner = first_with_field
         raw = owner.records.get(field) if owner else None
         if raw is None:
             return 0.0
         got = [x.strip() for x in re.split(r"[;；]", _str_value(raw))]
         if len(got) != len(expected):
-            return 0.0
-        hit = sum(1 for a, b in zip(expected, got) if _cells_match(a, b, is_numeric))
-        ratio = hit / len(expected)
+            # 段数不符仅该列记 0，不连坐整块（如单元格含分号导致段数错位）
+            ratio = 0.0
+        else:
+            hit = sum(1 for a, b in zip(expected, got) if _cells_match(a, b, is_numeric))
+            ratio = hit / len(expected)
         scores.append(ratio)
         # —— 风险标记：原地写回 owner.records[field] 的 dict 结构 ——
         cell = owner.records.get(field) if owner else None
@@ -1198,7 +1267,9 @@ def _validate_chunk(
                 risk.append("low_confidence")
             if risk:
                 cell["risk"] = risk
-    return min(scores)
+    # 平均对位率：单列格式/语义问题不再一票否决；真正的漏行/串行会同时拉低所有列，
+    # 平均分仍能捕获系统性错误（导出前有人工确认与 risk 标签兜底）
+    return sum(scores) / len(scores) if scores else 0.0
 
 
 def _split_chunk_at_run(chunk: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1222,6 +1293,21 @@ def _split_chunk_at_run(chunk: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str
     left = {**chunk, "rows": rows[:cut], "n_rows": cut}
     right = {**chunk, "rows": rows[cut:], "n_rows": n - cut}
     return left, right
+
+
+async def _gather_or_abort(coros: List[Any]) -> List[Any]:
+    """并发执行协程；任一协程抛出 FatalExtractError（鉴权/额度类系统级错误）时，
+    立即取消所有未完成的兄弟协程再上抛——避免剩余块继续发起注定失败的请求，
+    白白消耗额度并拉长失败耗时。普通异常仍按 asyncio.gather 默认行为上抛。"""
+    tasks = [asyncio.create_task(c) for c in coros]
+    try:
+        return await asyncio.gather(*tasks)
+    except FatalExtractError:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 async def _run_table_chunk(
@@ -1250,9 +1336,20 @@ async def _run_table_chunk(
         # 块内所有目标字段都是常量：无需调用模型
         return [_build_table(default_cat, const_records)]
 
+    local_human = base_human
+    if const:
+        # 明确告知模型被隐去的常量列：否则当【表计划】filters 引用这些列
+        # （如 城市=潍坊市）时，模型在块文本中找不到该列，会误判无行满足筛选
+        # 而整表输出“未找到”，导致对位率恒为 0、触发无效劈半重试
+        local_human += (
+            f"\n【隐含常量属性】为节省长度，本块数据中各行完全相同的列已被隐去。"
+            f"隐去的常量列及其值为：{json.dumps(const, ensure_ascii=False)}。"
+            f"在根据【表计划】的 filters 筛选数据时，请务必将这些常量属性视作每一行自带的数据，切勿因此误判全表为空！\n"
+        )
+
     model_chunk = _prune_chunk_to_columns(chunk, dyn_fields)
     ok, payload = await _invoke_chunk(
-        sem, idx, total, model_chunk, base_human, source_file, dyn_fields
+        sem, idx, total, model_chunk, local_human, source_file, dyn_fields
     )
 
     need_repair = False
@@ -1279,12 +1376,12 @@ async def _run_table_chunk(
         need_repair = True  # 请求失败且仍可下钻：劈半重试
 
     left, right = _split_chunk_at_run(chunk)
-    left_res, right_res = await asyncio.gather(
+    left_res, right_res = await _gather_or_abort([
         _run_table_chunk(sem, idx, total, left, base_human, source_file,
                          fields, default_cat, depth + 1),
         _run_table_chunk(sem, idx, total, right, base_human, source_file,
                          fields, default_cat, depth + 1),
-    )
+    ])
     if left_res is None and right_res is None:
         return None
 
@@ -1347,6 +1444,8 @@ async def _run_prose_chunk(
         if result is None or not result.tables:
             raise ValueError("模型未能返回有效的结构化数据")
         return _wrap_llm_tables(result.tables)
+    except FatalExtractError:
+        raise
     except Exception as e:
         logging.exception(f"文件 {source_file} 散文提取异常: {str(e)}")
         try:
@@ -1358,6 +1457,8 @@ async def _run_prose_chunk(
                 raise ValueError("兜底提取依然失败")
             logging.info("文件 %s 兜底提取成功，共 %d 张表", source_file, len(fallback.tables))
             return _wrap_llm_tables(fallback.tables)
+        except FatalExtractError:
+            raise
         except Exception as fallback_e:
             logging.exception(f"文件 {source_file} 兜底提取失败: {fallback_e}")
             return [ExtractedTable.model_construct(
@@ -1476,7 +1577,7 @@ async def extract_info_via_ai(
                     async with sem:
                         return await _run_prose_chunk(ch, base_human, source_file, fields)
 
-                per_chunk = await asyncio.gather(*[_prose_task(c) for c in chunks])
+                per_chunk = await _gather_or_abort([_prose_task(c) for c in chunks])
                 extracted_tables = _merge_chunk_tables(per_chunk, fields)
         else:
             total = len(chunks)
@@ -1486,7 +1587,7 @@ async def extract_info_via_ai(
                 source_file, total, total_rows, CHUNK_CONCURRENCY,
             )
             sem = asyncio.Semaphore(CHUNK_CONCURRENCY)
-            chunk_results = await asyncio.gather(*[
+            chunk_results = await _gather_or_abort([
                 _run_table_chunk(
                     sem, i + 1, total, chunk, base_human, source_file, fields, default_cat
                 )

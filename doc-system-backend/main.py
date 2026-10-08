@@ -127,7 +127,22 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     print("--- 准备通过 Python 内部启动 Uvicorn ---")
-    
+
+    # Ctrl+C 时先取消在途提取任务再关闭：Uvicorn 优雅关闭会等待在途请求跑完，
+    # 若不取消，提取任务会在后台继续调 LLM 消耗 token 直到全部块跑完。
+    # 不能用 lifespan shutdown 事件（Uvicorn 先等连接关闭后才触发），
+    # 必须覆写信号处理入口 handle_exit（Windows 上 Uvicorn 用 signal.signal 注册它）。
+    class _GracefulServer(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            from routers.extract import cancel_inflight_extractions
+            n = cancel_inflight_extractions()
+            if n:
+                logging.info(
+                    "收到退出信号，已取消 %d 个在途提取任务，停止 LLM token 消耗", n
+                )
+            super().handle_exit(sig, frame)
+
     # 2. 直接传 app 对象（不加引号），避免文件被重复执行
     # 3. 强制使用 h11 纯 Python 解析器
-    uvicorn.run(app, host="127.0.0.1", port=8000, loop="asyncio", http="h11")
+    config = uvicorn.Config(app, host="127.0.0.1", port=8000, loop="asyncio", http="h11")
+    _GracefulServer(config).run()

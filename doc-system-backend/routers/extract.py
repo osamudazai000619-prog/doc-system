@@ -1,12 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import asyncio
 import logging
 import re
 import unicodedata
 from pathlib import Path
 
-from services.extract_service import extract_info_via_ai
+from services.extract_service import extract_info_via_ai, FatalExtractError
 from services.history_service import record_extraction
 from services.scheme_service import touch_scheme
 from services.upload_service import UPLOAD_META, parse_file, parse_file_with_trace
@@ -17,6 +18,21 @@ from db.models import Asset
 router = APIRouter(prefix="/api", tags=["extract"])
 
 logger = logging.getLogger(__name__)
+
+# 在途提取请求任务登记：Ctrl+C 时 main.py 的信号处理器调用
+# cancel_inflight_extractions() 将其全部取消，避免后端已收到退出信号后
+# LLM 请求仍在后台持续消耗 token 直到整个提取任务跑完。
+_inflight_extractions: set = set()
+
+
+def cancel_inflight_extractions() -> int:
+    """取消所有在途提取请求任务，返回被取消的数量。"""
+    n = 0
+    for t in list(_inflight_extractions):
+        if not t.done():
+            t.cancel()
+            n += 1
+    return n
 
 
 def _to_str(value: Any) -> str:
@@ -114,12 +130,35 @@ def _build_trace_map(
 
 @router.post("/extract", response_model=List[ExtractResponseItem])
 async def extract_info(req: ExtractRequest):
+    # 把本请求任务登记到在途集合：Ctrl+C 时 main.py 信号处理器将其取消，
+    # 取消会沿 await 链级联取消所有分块子任务与 httpx 请求，立即停止 token 消耗。
+    task = asyncio.current_task()
+    _inflight_extractions.add(task)
+    try:
+        return await _extract_core(req)
+    finally:
+        _inflight_extractions.discard(task)
+
+
+async def _extract_core(req: ExtractRequest) -> List[ExtractResponseItem]:
     # 入口清洗：把 filename/content 等强制转为干净字符串，杜绝文件二进制
     # 流入 LLM 提示词或最终响应（否则 JSON 序列化时会因非 UTF-8 字节崩溃成 500）。
     documents = _sanitize_documents(req.documents)
     try:
         trace = _build_trace_map(documents)
         results = await extract_info_via_ai(req.prompt, req.fields, documents, trace=trace)
+    except FatalExtractError as e:
+        # 系统级不可重试错误（鉴权失败/额度耗尽/模型不存在）：
+        # 已在服务层中断整批，此处以 503 明确上报，绝不伪装成 200 + 全“未找到”
+        logger.error("提取中断（系统级错误）: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "LLM 服务不可用：免费额度耗尽或 API Key 鉴权失败。"
+                "请到模型网关控制台充值/关闭“仅使用免费额度”，"
+                "或更换有效的 API Key 后重启后端再试。"
+            ),
+        ) from e
     except Exception as e:
         # 只记录“文件名 + 错误类型”等元信息，绝不把文件内容/二进制拼进异常消息，
         # 保证抛出的 detail 永远是可 JSON 序列化的纯文本。
