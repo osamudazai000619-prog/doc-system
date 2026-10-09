@@ -48,12 +48,15 @@ _EMPTY_VALUES = {"", "未找到", "PARSE_ERROR", "None"}
 
 
 def _str_value(v: Any) -> str:
-    """从 records 值（str / ExtractResult / dict）中取出纯字符串值，供比对与拼接使用。"""
+    """从 records 值（str / ExtractResult / dict / list）中取出纯字符串值，供比对与拼接使用。"""
     if isinstance(v, ExtractResult):
-        return "" if v.value is None else str(v.value)
-    if isinstance(v, dict):
-        val = v.get("value")
-        return "" if val is None else str(val)
+        v = v.value
+    elif isinstance(v, dict):
+        v = v.get("value")
+    # 兼容模型无视"分号拼接"指令直接输出 JSON 数组：扁平化为分号串，
+    # 否则 str(list) 产生 "['a','b']" 字面量，按分号切分误判为单值广播整列
+    if isinstance(v, list):
+        return ";".join("" if x is None else str(x) for x in v)
     return "" if v is None else str(v)
 
 
@@ -64,6 +67,8 @@ def _wrap_value(v: Any) -> Dict[str, Any]:
         return v.to_dict()
     if isinstance(v, dict) and "value" in v:
         return v
+    if isinstance(v, list):
+        v = ";".join("" if x is None else str(x) for x in v)
     s = "" if v is None else str(v).strip()
     if s in _EMPTY_VALUES:
         return ExtractResult(value=(s or None), risk=["not_found"]).to_dict()
@@ -195,8 +200,9 @@ def _build_chat(model_name: str, thinking: Optional[bool] = None) -> ChatOpenAI:
         api_key=_llm_api_key,
         base_url=_llm_base_url,
         temperature=0,  # 尽量降低随机性；注意这不等于结果可复现
-        request_timeout=90,  # 单次请求最长等待 90 秒，防止无限阻塞；
-        # 最坏总耗时 = 阶段一90s + N文件×90s，需落在前端 axios 300s 超时之内
+        request_timeout=600,  # 单次请求最长等待 600 秒，防止无限阻塞；
+        # 注意：超时后会原块重试一次再劈半，单块最坏占用 600s×2；
+        # 大任务总耗时可能超过前端 axios 的 600s，此时前端报错但后端会继续跑完并写入历史记录
         extra_body=_build_extra_body(model_name, thinking),
     )
 
@@ -652,6 +658,68 @@ def filter_content_by_date(content: str, start_date: str, end_date: str) -> str:
     return "\n".join(out)
 
 
+def pre_filter_content_by_plan(content: str, plans: List[TablePlanItem]) -> str:
+    """计划规则前置过滤：依据阶段一解析出的 filters（如 {'城市': '潍坊市'}），
+    在分块前用纯代码物理删除无关数据行（如全省数据中非目标城市的行），
+    从源头减少块数与 LLM 请求量，避免无关块引发的重试与噪声行。
+
+    - 多条计划同列允许值取并集（计划间 OR），不同列之间 AND；
+    - 列名含 日期/时间/date/time 的条件跳过（日期范围由 filter_content_by_date
+      专门处理，等值/包含匹配会误删期内其他行）；
+    - 兼容多工作表：遇到 [工作表] 标记重新识别表头，表头行原样保留；
+    - 模糊匹配容错（LLM 提取"潍坊"而表内"潍坊市"，双向包含即命中）；
+    - 无任何过滤列命中表头时不删任何行，原样返回。"""
+    allowed: Dict[str, set] = {}
+    for p in plans or []:
+        for col, val in (p.filters or {}).items():
+            col = col.strip()
+            val = str(val).strip()
+            if not col or not val:
+                continue
+            if any(k in col.lower() for k in ("日期", "时间", "date", "time")):
+                continue  # 日期条件交给 filter_content_by_date
+            allowed.setdefault(col, set()).add(val)
+    if not allowed:
+        return content
+
+    lines = content.split("\n")
+    out: List[str] = []
+    headers: Optional[List[str]] = None
+    filter_idx: Dict[int, set] = {}
+    dropped = 0
+    for line in lines:
+        if line.startswith("["):
+            headers = None  # 新工作表，重新识别表头
+            out.append(line)
+            continue
+        if not line.strip() or " | " not in line:
+            out.append(line)
+            continue
+        cells = [c.strip() for c in line.split(" | ")]
+        if headers is None:
+            headers = cells
+            filter_idx = {i: allowed[h] for i, h in enumerate(headers) if h in allowed}
+            out.append(line)
+            continue
+        if not filter_idx:
+            out.append(line)
+            continue
+        keep = True
+        for i, vals in filter_idx.items():
+            cv = cells[i] if i < len(cells) else ""
+            if not any(a in cv or cv in a for a in vals):
+                keep = False
+                break
+        if keep:
+            out.append(line)
+        else:
+            dropped += 1
+    if not dropped:
+        return content
+    logging.info("计划规则前置过滤删除 %d 行无关数据", dropped)
+    return "\n".join(out)
+
+
 # ================= 分块提取配置 =================
 # 旧方案"只喂前 N 行、其余丢弃"会导致 41 国数据只提取到前 4 国。
 # 现方案：把大表切成多个小块分别请求、按原文顺序合并，保证全量覆盖。
@@ -926,14 +994,18 @@ _EXTRACT_SYSTEM = (
     "6. 一行都没筛到：该表所有字段输出“未找到”。\n"
     "7.【段落溯源】若【文档内容】中某行以 ¶N 开头（N 为数字），则 N 是该行的段落ID。"
     "请在每个输出值后紧接追加 ||p:N|| 标注其来源段落；多行拼接时每段各自标注，"
-    "例如 北京||p:3||;上海||p:8||。无法定位段落时省略该标记（只输出纯值）。"
+    "例如 北京||p:3||;上海||p:8||。无法定位段落时省略该标记（只输出纯值）。\n"
+    "8.【层级向下兼容】若提取字段中包含斜杠“/”（如“国家/地区”、“省/市”），"
+    "该字段兼容多个实体层级：必须以文档中出现的最细粒度子层级实体"
+    "（如省份、区县、具体站点）为基础粒度逐行提取，绝不允许只提取宏观汇总实体"
+    "（如只输出国家）而漏掉下属层级数据。"
 )
 
 # 分块模式追加的硬约束
 _CHUNK_EXTRACT_SYSTEM = _EXTRACT_SYSTEM + (
-    "\n8.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
+    "\n9.【分块提取】本次输入只是全文分块后的一块，只输出本块内的数据行，"
     "严禁补充块外数据。\n"
-    "9. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
+    "10. 每个字段分号拼接值的段数必须恰好等于告知的本块数据行数 N；"
     "即使某列在块内每行取值相同（如国家、大洲、人口），也必须逐行重复 N 次，"
     "严禁只给一个汇总值。"
 )
@@ -969,7 +1041,7 @@ def _normalize_tables(
         records: Dict[str, Any] = {}
         for f in fields:
             # 解析 LLM 附加的段落ID（||p:N||），剥离后得到纯值
-            raw_in = _strip_conf_marks(str(t.records.get(f, "")).strip())
+            raw_in = _strip_conf_marks(_str_value(t.records.get(f, "")).strip())
             pids, raw = _extract_para_ids(raw_in)
             segs = [s.strip() for s in re.split(r"[;；]", raw)] if raw else []
             segs = [s if s else "未找到" for s in segs]
@@ -1013,16 +1085,26 @@ def _merge_chunk_tables(
     buckets: Dict[str, Dict[str, List[str]]] = {}
     pid_buckets: Dict[str, Dict[str, List[str]]] = {}
     for tables in per_chunk:
+        # 块内同名表去重：同一块里模型输出多张同名表且内容与已见完全一致时，
+        # 判定为"影分身"复制品直接丢弃；内容不同则视为数据续接照常拼接，
+        # 避免误删模型合理拆分的真实行
+        seen: Dict[str, tuple] = {}
         for t in tables:
-            if t.table_category not in buckets:
-                buckets[t.table_category] = {f: [] for f in fields}
-                pid_buckets[t.table_category] = {f: [] for f in fields}
-                order.append(t.table_category)
+            cat = _str_value(t.table_category).strip()
+            fingerprint = tuple(_str_value(t.records.get(f, "")) for f in fields)
+            if seen.get(cat) == fingerprint:
+                logging.warning("块内同名表「%s」内容完全重复，丢弃复制品", cat)
+                continue
+            seen[cat] = fingerprint
+            if cat not in buckets:
+                buckets[cat] = {f: [] for f in fields}
+                pid_buckets[cat] = {f: [] for f in fields}
+                order.append(cat)
             for f in fields:
-                buckets[t.table_category][f].append(_str_value(t.records.get(f, "未找到")))
+                buckets[cat][f].append(_str_value(t.records.get(f, "未找到")))
                 cell = t.records.get(f)
                 pp = cell.get("__para_ids", "") if isinstance(cell, dict) else ""
-                pid_buckets[t.table_category][f].extend(
+                pid_buckets[cat][f].extend(
                     [x for x in re.split(r"[;；]", pp) if x != ""] if pp else []
                 )
     merged: List[ExtractedTable] = []
@@ -1313,6 +1395,7 @@ async def _gather_or_abort(coros: List[Any]) -> List[Any]:
 async def _run_table_chunk(
     sem: asyncio.Semaphore, idx: int, total: int, chunk: Dict[str, Any],
     base_human: str, source_file: str, fields: List[str], default_cat: str,
+    plan_items: List[TablePlanItem],
     depth: int = 0,
 ) -> Optional[List[ExtractedTable]]:
     """
@@ -1355,6 +1438,26 @@ async def _run_table_chunk(
     need_repair = False
     if ok:
         tables = _normalize_tables(payload, dyn_fields, n_rows)
+        # 无关数据块熔断：模型对本块所有动态字段均输出"未找到"，说明该块数据不在
+        # 用户提取计划内（如源表含全省城市而只要求其中3个市）。直接放行，跳过
+        # _validate_chunk——否则拿源列真实值对占位值必然 0% 对位率，触发无效劈半
+        # 重试风暴（半块依旧全"未找到"，反复劈半只会空耗额度并拖垮全链路耗时）
+        irrelevant = bool(tables) and all(
+            all(
+                s in _EMPTY_VALUES
+                for s in (x.strip() for x in re.split(r"[;；]", _str_value(t.records.get(f, ""))))
+            )
+            for t in tables
+            for f in dyn_fields
+        )
+        if irrelevant:
+            logging.info(
+                "文件 %s 块 %d/%d 所有字段均为未找到，判定为无关数据块，直接丢弃不合并",
+                source_file, idx, total,
+            )
+            # 无关块返回空列表而非占位表：避免把常量列（如城市=东营市）注入结果，
+            # 导致前端出现大量"城市名+全未找到"的噪声行
+            return []
         checks = _chunk_check_columns(model_chunk, dyn_fields)
         if checks and n_rows >= REPAIR_MIN_ROWS and depth < REPAIR_MAX_DEPTH:
             score = _validate_chunk(model_chunk, tables, checks)
@@ -1366,10 +1469,68 @@ async def _run_table_chunk(
                 )
                 need_repair = True
         if not need_repair:
-            # 常量列直填值并入模型输出，还原为完整字段集
-            for t in tables:
+            # 逐表净化：只对本块真正提取到真实数据的表注入本块常量列并返回；
+            # 空表（动态字段全"未找到"）必须丢弃——否则常量列（如 城市=德州市）
+            # 会把它"复活"成幽灵行，合并后污染其他城市表，产生
+            # "城市名错配 + 其余全未找到"的噪声行
+            valid_tables = []
+            for ti, t in enumerate(tables):
+                is_empty = all(
+                    s in _EMPTY_VALUES
+                    for f in dyn_fields
+                    for s in (x.strip() for x in re.split(r"[;；]", _str_value(t.records.get(f, ""))))
+                )
+                if is_empty:
+                    continue
+                # 计划锚定：先按 strip 后双向模糊包含匹配（防模型在分类名上加空格
+                # 或细微改写）；匹配不上且模型返回表数与计划数一致时，按输出顺序锚定
+                # （防模型改名为"表二"之类）。锚定成功后把分类名回写为计划规范名，
+                # 保证 _merge_chunk_tables 按同一 key 合并，不因命名漂移分裂出孤表
+                matched_plan = None
+                t_cat = _str_value(t.table_category).strip()
+                for plan in plan_items:
+                    p_cat = str(plan.category).strip()
+                    if p_cat and t_cat and (p_cat in t_cat or t_cat in p_cat):
+                        matched_plan = plan
+                        break
+                if (
+                    matched_plan is None
+                    and len(tables) == len(plan_items)
+                    and ti < len(plan_items)
+                ):
+                    matched_plan = plan_items[ti]
+                # 分类交叉核验：锚定的计划若带 filters（如 城市=潍坊市），而本块常量列
+                # 与之矛盾（常量 城市=德州市），说明模型把本块数据填进了错误的表
+                # （张冠李戴），直接丢弃防止跨城污染。filter 列非块内常量（如跨城市
+                # 边界块）时无法判定，照常保留
+                mismatched = False
+                if matched_plan is not None:
+                    for f_col, f_val in (matched_plan.filters or {}).items():
+                        vals = const.get(f_col)
+                        if not vals:
+                            continue
+                        fv = str(f_val).strip()
+                        # 模糊匹配与前置过滤一致：子串关系任一方向成立即视为匹配，
+                        # 避免 "潍坊" vs "潍坊市" 等写法差异误杀正确表
+                        if not any(fv in cv or cv in fv for cv in vals):
+                            mismatched = True
+                            break
+                if mismatched:
+                    logging.warning(
+                        "文件 %s 块 %d/%d 表分类「%s」与本块常量列 %s 矛盾，丢弃跨填表",
+                        source_file, idx, total, t.table_category,
+                        json.dumps(const, ensure_ascii=False),
+                    )
+                    continue
+                if (
+                    matched_plan is not None
+                    and str(matched_plan.category).strip()
+                    and t_cat != str(matched_plan.category).strip()
+                ):
+                    t.table_category = matched_plan.category
                 t.records.update(const_records)
-            return tables
+                valid_tables.append(t)
+            return valid_tables
     else:
         if n_rows <= 1 or depth >= REPAIR_MAX_DEPTH:
             return None
@@ -1377,11 +1538,11 @@ async def _run_table_chunk(
 
     left, right = _split_chunk_at_run(chunk)
     left_res, right_res = await _gather_or_abort([
-        _run_table_chunk(sem, idx, total, left, base_human, source_file,
-                         fields, default_cat, depth + 1),
-        _run_table_chunk(sem, idx, total, right, base_human, source_file,
-                         fields, default_cat, depth + 1),
-    ])
+            _run_table_chunk(sem, idx, total, left, base_human, source_file,
+                             fields, default_cat, plan_items, depth + 1),
+            _run_table_chunk(sem, idx, total, right, base_human, source_file,
+                             fields, default_cat, plan_items, depth + 1),
+        ])
     if left_res is None and right_res is None:
         return None
 
@@ -1523,6 +1684,16 @@ async def extract_info_via_ai(
             doc_content = filter_content_by_date(doc_content, date_range[0], date_range[1])
             logging.info("文件 %s 日期筛选后内容长度: %d 字符", source_file, len(doc_content))
 
+        # 计划规则前置过滤：分块前物理删除不在 plan filters 内的行（如无关城市），
+        # 从源头减少块数；必须在列裁剪之前（过滤依赖的列如"城市"可能不在 fields 中）
+        before_filter = len(doc_content)
+        doc_content = pre_filter_content_by_plan(doc_content, plan_items)
+        if len(doc_content) < before_filter:
+            logging.info(
+                "文件 %s 计划前置过滤: %d -> %d 字符",
+                source_file, before_filter, len(doc_content),
+            )
+
         # 只保留用户要填的字段同名列，删掉无关列，大幅减少输入 token
         # （必须在日期筛选之后：筛选依赖日期列，而日期列通常不在 fields 中）
         before = len(doc_content)
@@ -1589,7 +1760,8 @@ async def extract_info_via_ai(
             sem = asyncio.Semaphore(CHUNK_CONCURRENCY)
             chunk_results = await _gather_or_abort([
                 _run_table_chunk(
-                    sem, i + 1, total, chunk, base_human, source_file, fields, default_cat
+                    sem, i + 1, total, chunk, base_human, source_file, fields, default_cat,
+                    plan_items,
                 )
                 for i, chunk in enumerate(chunks)
             ])

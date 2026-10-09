@@ -72,7 +72,7 @@
             :key="d.id"
             class="side-item"
             :class="{ active: !draftManage && ws.currentDraftId === d.id }"
-            @click="draftManage ? toggleSel(draftSel, d.id) : handleRestore(d)"
+            @click="draftManage ? toggleDraftSel(d.id) : handleRestore(d)"
           >
             <el-checkbox
               v-if="draftManage"
@@ -130,7 +130,7 @@
             v-for="h in ws.historyItems"
             :key="h.id"
             class="side-item history-item"
-            @click="historyManage ? toggleSel(historySel, h.id) : ws.openHistoryDetail(h.id)"
+            @click="historyManage ? toggleHistorySel(h.id) : ws.openHistoryDetail(h.id)"
           >
             <el-checkbox
               v-if="historyManage"
@@ -230,6 +230,14 @@ function toggleSel(sel, id) {
   sel.value = sel.value.includes(id)
     ? sel.value.filter((x) => x !== id)
     : [...sel.value, id]
+}
+
+function toggleDraftSel(id) {
+  toggleSel(draftSel, id)
+}
+
+function toggleHistorySel(id) {
+  toggleSel(historySel, id)
 }
 
 async function handleBatchDeleteDrafts() {
